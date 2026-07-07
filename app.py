@@ -1103,11 +1103,11 @@ def render_data_quality(data: pd.DataFrame) -> None:
             apply_chart_spacing(
                 fig,
                 height=430,
-                margin={"l": 78, "r": 82, "t": 88, "b": 74},
+                margin={"l": 112, "r": 118, "t": 96, "b": 92},
                 colorbar_title="المناطق",
             )
-            fig.update_xaxes(title_text="الفترة")
-            fig.update_yaxes(title_text="المواقع")
+            fig.update_xaxes(title_text="الفترة", title_standoff=34)
+            fig.update_yaxes(title_text="المواقع", title_standoff=42, tickformat=",.0f")
             st.plotly_chart(fig, width="stretch")
         with right:
             table = coverage.rename(
@@ -1192,22 +1192,35 @@ def apply_chart_spacing(
 ) -> None:
     fig.update_layout(
         height=height,
-        margin=margin or {"l": 72, "r": 72, "t": 72, "b": 72},
+        margin=margin or {"l": 104, "r": 104, "t": 86, "b": 92},
         font={"family": "Segoe UI, Tahoma, Arial, sans-serif", "size": 12},
         title={"x": 0.5, "xanchor": "center", "font": {"size": 17}},
         hoverlabel={"align": "right"},
         uniformtext={"minsize": 10, "mode": "hide"},
     )
-    fig.update_xaxes(automargin=True, title_standoff=18, tickfont={"size": 11})
-    fig.update_yaxes(automargin=True, title_standoff=18, tickfont={"size": 11})
+    fig.update_xaxes(
+        automargin=True,
+        title_standoff=30,
+        title_font={"size": 12},
+        tickfont={"size": 10},
+        separatethousands=True,
+    )
+    fig.update_yaxes(
+        automargin=True,
+        title_standoff=38,
+        title_font={"size": 12},
+        tickfont={"size": 10},
+        separatethousands=True,
+    )
     if colorbar_title:
         fig.update_layout(
             coloraxis_colorbar={
                 "title": {"text": colorbar_title, "side": "top"},
-                "x": 1.03,
-                "xpad": 10,
+                "x": 1.08,
+                "xpad": 14,
                 "ypad": 8,
-                "len": 0.82,
+                "len": 0.78,
+                "thickness": 14,
             }
         )
 
@@ -1242,11 +1255,22 @@ def render_trend_chart(trend: pd.DataFrame) -> None:
     fig.update_layout(
         title="اتجاه الإيجار مع حجم العقود",
         hovermode="x unified",
-        legend={"orientation": "h", "y": 1.1, "x": 0.02},
+        legend={"orientation": "h", "y": 1.16, "x": 0.02},
     )
-    apply_chart_spacing(fig, height=430, margin={"l": 82, "r": 82, "t": 82, "b": 70})
-    fig.update_yaxes(title_text="الإيجار (ر.س)", title_standoff=18, secondary_y=False)
-    fig.update_yaxes(title_text="العقود", title_standoff=18, secondary_y=True, showgrid=False)
+    apply_chart_spacing(fig, height=440, margin={"l": 118, "r": 118, "t": 96, "b": 86})
+    fig.update_yaxes(
+        title_text="الإيجار (ر.س)",
+        title_standoff=44,
+        tickformat=",.0f",
+        secondary_y=False,
+    )
+    fig.update_yaxes(
+        title_text="العقود",
+        title_standoff=44,
+        tickformat=",.0f",
+        secondary_y=True,
+        showgrid=False,
+    )
     st.plotly_chart(fig, width="stretch")
 
 
@@ -1276,10 +1300,10 @@ def render_entity_ranking(entity_latest: pd.DataFrame) -> None:
     apply_chart_spacing(
         fig,
         height=480,
-        margin={"l": 220, "r": 72, "t": 82, "b": 74},
+        margin={"l": 260, "r": 118, "t": 88, "b": 92},
         colorbar_title="العقود",
     )
-    fig.update_xaxes(title_text="الإيجار المرجح (ر.س)")
+    fig.update_xaxes(title_text="الإيجار المرجح (ر.س)", title_standoff=34, tickformat=",.0f")
     fig.update_yaxes(title_text="")
     st.plotly_chart(fig, width="stretch")
 
@@ -1309,10 +1333,10 @@ def render_growth_chart(growth: pd.DataFrame) -> None:
     apply_chart_spacing(
         fig,
         height=470,
-        margin={"l": 220, "r": 72, "t": 82, "b": 74},
+        margin={"l": 260, "r": 118, "t": 88, "b": 92},
         colorbar_title="العقود",
     )
-    fig.update_xaxes(title_text="النمو %")
+    fig.update_xaxes(title_text="النمو %", title_standoff=34)
     fig.update_yaxes(title_text="")
     st.plotly_chart(fig, width="stretch")
 
@@ -1341,11 +1365,11 @@ def render_price_demand_scatter(scores: pd.DataFrame) -> None:
     apply_chart_spacing(
         fig,
         height=430,
-        margin={"l": 78, "r": 82, "t": 82, "b": 76},
+        margin={"l": 112, "r": 118, "t": 88, "b": 98},
         colorbar_title="النمو %",
     )
-    fig.update_xaxes(title_text="متوسط الإيجار (ر.س)")
-    fig.update_yaxes(title_text="العقود")
+    fig.update_xaxes(title_text="متوسط الإيجار (ر.س)", title_standoff=34, tickformat=",.0f")
+    fig.update_yaxes(title_text="العقود", title_standoff=42, tickformat=",.0f")
     st.plotly_chart(fig, width="stretch")
 
 
@@ -1369,12 +1393,12 @@ def render_property_mix(property_mix: pd.DataFrame) -> None:
     apply_chart_spacing(
         fig,
         height=470,
-        margin={"l": 78, "r": 82, "t": 82, "b": 150},
+        margin={"l": 112, "r": 118, "t": 88, "b": 166},
         colorbar_title="متوسط الإيجار",
     )
-    fig.update_layout(xaxis_tickangle=-30)
+    fig.update_layout(xaxis_tickangle=-35)
     fig.update_xaxes(title_text="", tickfont={"size": 10})
-    fig.update_yaxes(title_text="العقود")
+    fig.update_yaxes(title_text="العقود", title_standoff=42, tickformat=",.0f")
     st.plotly_chart(fig, width="stretch")
 
 
@@ -1409,10 +1433,10 @@ def render_heatmap(entity_latest: pd.DataFrame) -> None:
     apply_chart_spacing(
         fig,
         height=470,
-        margin={"l": 160, "r": 82, "t": 82, "b": 150},
+        margin={"l": 190, "r": 118, "t": 88, "b": 166},
         colorbar_title="متوسط الإيجار",
     )
-    fig.update_xaxes(title_text="", tickangle=-30, tickfont={"size": 10})
+    fig.update_xaxes(title_text="", tickangle=-35, tickfont={"size": 10})
     fig.update_yaxes(title_text="", tickfont={"size": 10})
     st.plotly_chart(fig, width="stretch")
 
