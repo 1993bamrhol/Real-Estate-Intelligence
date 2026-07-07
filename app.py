@@ -1108,7 +1108,7 @@ def render_data_quality(data: pd.DataFrame) -> None:
             )
             fig.update_xaxes(title_text="الفترة", title_standoff=34)
             fig.update_yaxes(title_text="المواقع", title_standoff=42, tickformat=",.0f")
-            st.plotly_chart(fig, width="stretch")
+            render_chart(fig)
         with right:
             table = coverage.rename(
                 columns={
@@ -1196,6 +1196,11 @@ def apply_chart_spacing(
         font={"family": "Segoe UI, Tahoma, Arial, sans-serif", "size": 12},
         title={"x": 0.5, "xanchor": "center", "font": {"size": 17}},
         hoverlabel={"align": "right"},
+        hovermode="closest",
+        dragmode=False,
+        clickmode="event",
+        uirevision="real-estate-intelligence",
+        legend={"itemclick": False, "itemdoubleclick": False},
         uniformtext={"minsize": 10, "mode": "hide"},
     )
     fig.update_xaxes(
@@ -1223,6 +1228,20 @@ def apply_chart_spacing(
                 "thickness": 14,
             }
         )
+
+
+CHART_CONFIG = {
+    "displayModeBar": False,
+    "displaylogo": False,
+    "doubleClick": "reset",
+    "responsive": True,
+    "scrollZoom": False,
+    "showTips": False,
+}
+
+
+def render_chart(fig: go.Figure) -> None:
+    st.plotly_chart(fig, width="stretch", config=CHART_CONFIG)
 
 
 def render_trend_chart(trend: pd.DataFrame) -> None:
@@ -1254,7 +1273,7 @@ def render_trend_chart(trend: pd.DataFrame) -> None:
     )
     fig.update_layout(
         title="اتجاه الإيجار مع حجم العقود",
-        hovermode="x unified",
+        hovermode="closest",
         legend={"orientation": "h", "y": 1.16, "x": 0.02},
     )
     apply_chart_spacing(fig, height=440, margin={"l": 118, "r": 118, "t": 96, "b": 86})
@@ -1271,7 +1290,7 @@ def render_trend_chart(trend: pd.DataFrame) -> None:
         secondary_y=True,
         showgrid=False,
     )
-    st.plotly_chart(fig, width="stretch")
+    render_chart(fig)
 
 
 def render_entity_ranking(entity_latest: pd.DataFrame) -> None:
@@ -1305,7 +1324,7 @@ def render_entity_ranking(entity_latest: pd.DataFrame) -> None:
     )
     fig.update_xaxes(title_text="الإيجار المرجح (ر.س)", title_standoff=34, tickformat=",.0f")
     fig.update_yaxes(title_text="")
-    st.plotly_chart(fig, width="stretch")
+    render_chart(fig)
 
 
 def render_growth_chart(growth: pd.DataFrame) -> None:
@@ -1338,7 +1357,7 @@ def render_growth_chart(growth: pd.DataFrame) -> None:
     )
     fig.update_xaxes(title_text="النمو %", title_standoff=34)
     fig.update_yaxes(title_text="")
-    st.plotly_chart(fig, width="stretch")
+    render_chart(fig)
 
 
 def render_price_demand_scatter(scores: pd.DataFrame) -> None:
@@ -1370,7 +1389,7 @@ def render_price_demand_scatter(scores: pd.DataFrame) -> None:
     )
     fig.update_xaxes(title_text="متوسط الإيجار (ر.س)", title_standoff=34, tickformat=",.0f")
     fig.update_yaxes(title_text="العقود", title_standoff=42, tickformat=",.0f")
-    st.plotly_chart(fig, width="stretch")
+    render_chart(fig)
 
 
 def render_property_mix(property_mix: pd.DataFrame) -> None:
@@ -1399,7 +1418,7 @@ def render_property_mix(property_mix: pd.DataFrame) -> None:
     fig.update_layout(xaxis_tickangle=-35)
     fig.update_xaxes(title_text="", tickfont={"size": 10})
     fig.update_yaxes(title_text="العقود", title_standoff=42, tickformat=",.0f")
-    st.plotly_chart(fig, width="stretch")
+    render_chart(fig)
 
 
 def render_heatmap(entity_latest: pd.DataFrame) -> None:
@@ -1438,7 +1457,7 @@ def render_heatmap(entity_latest: pd.DataFrame) -> None:
     )
     fig.update_xaxes(title_text="", tickangle=-35, tickfont={"size": 10})
     fig.update_yaxes(title_text="", tickfont={"size": 10})
-    st.plotly_chart(fig, width="stretch")
+    render_chart(fig)
 
 
 def render_opportunities(
