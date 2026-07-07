@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.log
+.streamlit/secrets.toml
+
+# Raw source downloads are reproducible and can be large.
+data/raw/*.csv
+data/catalog/*.json
+
+# Keep the compact deployable snapshot in git.
+!data/processed/
+!data/processed/rental_market.csv.gz
