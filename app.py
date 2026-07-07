@@ -490,7 +490,9 @@ def render_decision_assistant(
     examples = [
         "ما أفضل الفرص العقارية الآن؟",
         "أفضل أحياء الرياض للشقق السكنية",
+        "قارن الرياض وجدة للشقق السكنية",
         "أين الطلب قوي والسعر أقل؟",
+        "ما مخاطر أفضل فرصة؟",
         "ما أعلى المواقع نموا؟",
     ]
     left, right = st.columns([1, 2.3])
@@ -516,6 +518,10 @@ def answer_decision_question(
     scoped, filters = apply_question_scope(data, question)
     min_deals = int(settings["min_deals"])
     mode = detect_question_mode(question)
+    limit = requested_result_limit(question)
+
+    if mode == "compare":
+        return answer_comparison_question(question, data, scoped, filters, min_deals, limit)
 
     if mode == "growth":
         ranking = top_growth_markets(scoped, min_deals=min_deals).copy()
@@ -523,6 +529,10 @@ def answer_decision_question(
             ranking["score"] = ranking["growth_pct"].clip(lower=-50, upper=50).rank(pct=True) * 100
         answer_title = "أعلى نمو داخل نطاق السؤال"
         method = "تم ترتيب النتائج حسب نمو متوسط الإيجار مع اشتراط حد أدنى للعقود في فترتين."
+    elif mode == "risk":
+        ranking = opportunity_scores(scoped, min_deals=min_deals).copy()
+        answer_title = "قراءة المخاطر للفرص الأعلى"
+        method = "تم اختيار أعلى الفرص ثم فحص حجم العقود، النمو، وثقة المقارنة قبل صياغة التنبيهات."
     elif mode == "demand":
         latest = scoped[scoped["period_index"] == scoped["period_index"].max()].copy()
         ranking = aggregate_market(latest, ["region_ar", "city_ar", "location_ar", "property_type"])
@@ -557,9 +567,13 @@ def answer_decision_question(
             "filters": filters,
             "table": ranking,
             "facts": {},
+            "reasons": [],
+            "warnings": ["وسّع نطاق السؤال أو خفّض حد العقود للحصول على قراءة أوضح."],
+            "followups": default_followups(),
+            "limit": limit,
         }
 
-    ranking = ranking.dropna(subset=["average_rent", "total_deals"]).head(8).copy()
+    ranking = ranking.dropna(subset=["average_rent", "total_deals"]).head(limit).copy()
     if ranking.empty:
         filter_text = "، ".join(filters) if filters else "حسب الفلاتر الحالية"
         return {
@@ -569,6 +583,10 @@ def answer_decision_question(
             "filters": filters,
             "table": ranking,
             "facts": {},
+            "reasons": [],
+            "warnings": ["البيانات المتاحة لا تكفي لإصدار توصية عملية داخل هذا النطاق."],
+            "followups": default_followups(),
+            "limit": limit,
         }
     best = ranking.iloc[0]
     location = str(best.get("location_ar", "-"))
@@ -582,6 +600,7 @@ def answer_decision_question(
 
     return {
         "title": answer_title,
+        "decision": assistant_decision(best, ranking, mode, min_deals),
         "summary": (
             f"أفضل نتيجة هي {location} لنوع {property_type}. "
             f"متوسط الإيجار {format_sar(rent)}، وحجم العقود {deals:,.0f}، والنمو {growth_text}. "
@@ -590,6 +609,10 @@ def answer_decision_question(
         "method": method,
         "filters": filters,
         "table": ranking,
+        "reasons": assistant_reasons(best, ranking, mode),
+        "warnings": assistant_warnings(best, ranking, min_deals),
+        "followups": suggested_followups(location, property_type, mode),
+        "limit": limit,
         "facts": {
             "درجة": f"{score:,.1f}",
             "الإيجار": format_sar(rent),
@@ -599,10 +622,253 @@ def answer_decision_question(
     }
 
 
+def answer_comparison_question(
+    question: str,
+    data: pd.DataFrame,
+    scoped: pd.DataFrame,
+    filters: list[str],
+    min_deals: int,
+    limit: int,
+) -> dict[str, object]:
+    group_col, group_label, requested_values = comparison_group(data, question)
+    source = scoped.copy()
+    if requested_values:
+        source = source[source[group_col].isin(requested_values)].copy()
+
+    comparison = comparison_ranking(source, group_col, min_deals).head(limit)
+    filter_text = "، ".join(filters) if filters else "حسب الفلاتر الحالية"
+
+    if comparison.empty:
+        return {
+            "title": "المقارنة غير كافية البيانات",
+            "summary": f"لم أجد بيانات كافية للمقارنة ضمن: {filter_text}. جرّب مقارنة مدن أوسع أو خفف حد العقود.",
+            "method": "المقارنة تحتاج نتائج تتجاوز حد العقود في آخر فترة متاحة.",
+            "filters": filters,
+            "table": comparison,
+            "facts": {},
+            "reasons": [],
+            "warnings": ["لا توجد عينة كافية لإظهار خيار متفوق بثقة."],
+            "followups": default_followups(),
+            "limit": limit,
+        }
+
+    best = comparison.iloc[0]
+    second = comparison.iloc[1] if len(comparison) > 1 else None
+    best_name = str(best.get(group_col, "-"))
+    score = float(best.get("score", 0))
+    rent = float(best.get("average_rent", 0))
+    deals = float(best.get("total_deals", 0))
+    growth = best.get("growth_pct", pd.NA)
+    growth_text = "-" if pd.isna(growth) else format_pct_text(float(growth))
+    second_text = ""
+    if second is not None:
+        second_name = str(second.get(group_col, "-"))
+        second_score = float(second.get("score", 0))
+        second_text = f" أقرب بديل في المقارنة هو {second_name} بدرجة {second_score:,.1f}."
+
+    return {
+        "title": f"مقارنة حسب {group_label}",
+        "decision": f"الخيار الأقوى في هذه المقارنة: {best_name}.",
+        "summary": (
+            f"{best_name} يتصدر المقارنة بدرجة {score:,.1f}. "
+            f"متوسط الإيجار {format_sar(rent)}، العقود {deals:,.0f}، والنمو {growth_text}."
+            f"{second_text} نطاق الإجابة: {filter_text}."
+        ),
+        "method": "تمت المقارنة بدمج الطلب، النمو، وجاذبية السعر في آخر فترة قابلة للمقارنة.",
+        "filters": filters,
+        "table": comparison,
+        "reasons": assistant_reasons(best, comparison, "compare"),
+        "warnings": assistant_warnings(best, comparison, min_deals),
+        "followups": suggested_followups(best_name, "العقار المطلوب", "compare"),
+        "limit": limit,
+        "facts": {
+            "الأقوى": best_name,
+            "درجة": f"{score:,.1f}",
+            "الإيجار": format_sar(rent),
+            "العقود": f"{deals:,.0f}",
+        },
+    }
+
+
+def comparison_group(data: pd.DataFrame, question: str) -> tuple[str, str, list[str]]:
+    normalized = normalize_search_text(question)
+    city_matches = matching_values(data["city_ar"].dropna().unique(), normalized)
+    region_matches = matching_values(
+        data["region_ar"].dropna().unique(),
+        normalized,
+        allow_token_match=True,
+    )
+    location_matches = matching_values(data["location_ar"].dropna().unique(), normalized)
+    property_matches = matching_property_types(data["property_type"].dropna().unique(), normalized)
+
+    if len(city_matches) >= 2:
+        return "city_ar", "المدينة", city_matches
+    if len(region_matches) >= 2:
+        return "region_ar", "المنطقة", region_matches
+    if len(location_matches) >= 2:
+        return "location_ar", "الموقع", location_matches
+    if len(property_matches) >= 2:
+        return "property_type", "نوع العقار", property_matches
+    if city_matches:
+        return "location_ar", "الموقع", []
+    return "city_ar", "المدينة", []
+
+
+def comparison_ranking(frame: pd.DataFrame, group_col: str, min_deals: int) -> pd.DataFrame:
+    if frame.empty or group_col not in frame.columns:
+        return pd.DataFrame()
+
+    trend = aggregate_market(frame, ["period_index", "period", group_col]).sort_values(
+        [group_col, "period_index"]
+    )
+    if trend.empty:
+        return trend
+
+    grouped = trend.groupby(group_col, dropna=False)
+    trend["previous_period"] = grouped["period"].shift(1)
+    trend["previous_average_rent"] = grouped["average_rent"].shift(1)
+    trend["previous_total_deals"] = grouped["total_deals"].shift(1)
+    trend["growth_pct"] = (
+        (trend["average_rent"] - trend["previous_average_rent"])
+        / trend["previous_average_rent"]
+        * 100
+    )
+    trend.loc[trend["previous_average_rent"].le(0), "growth_pct"] = pd.NA
+
+    latest_period = int(trend["period_index"].max())
+    latest = trend[trend["period_index"] == latest_period].dropna(subset=["average_rent", "total_deals"]).copy()
+    latest = latest[latest["total_deals"] >= min_deals].copy()
+    if latest.empty:
+        return latest
+
+    if len(latest) == 1:
+        latest["demand_rank"] = 1.0
+        latest["growth_rank"] = 0.5
+        latest["affordability_rank"] = 0.5
+    else:
+        latest["demand_rank"] = latest["total_deals"].rank(pct=True)
+        latest["growth_rank"] = latest["growth_pct"].fillna(0).clip(lower=-50, upper=50).rank(pct=True)
+        latest["affordability_rank"] = 1 - latest["average_rent"].rank(pct=True)
+
+    latest["score"] = (
+        latest["demand_rank"] * 40
+        + latest["growth_rank"] * 35
+        + latest["affordability_rank"] * 25
+    )
+    return latest.sort_values("score", ascending=False)
+
+
+def requested_result_limit(question: str) -> int:
+    normalized = normalize_search_text(question)
+    match = re.search(r"\b(\d{1,2})\b", normalized)
+    if not match:
+        return 8
+    value = int(match.group(1))
+    return max(3, min(value, 15))
+
+
+def safe_float(value: object, default: float = 0.0) -> float:
+    if pd.isna(value):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def assistant_decision(row: pd.Series, ranking: pd.DataFrame, mode: str, min_deals: int) -> str:
+    score = safe_float(row.get("score", 0))
+    deals = safe_float(row.get("total_deals", 0))
+    growth = row.get("growth_pct", pd.NA)
+
+    if mode == "risk":
+        if deals < min_deals * 2:
+            return "القرار: لا تعتمد عليها وحدها؛ حجم العقود قريب من الحد الأدنى."
+        if not pd.isna(growth) and abs(float(growth)) >= 35:
+            return "القرار: فرصة تحتاج تحقق ميداني؛ النمو حاد وقد يكون استثنائيا."
+        return "القرار: المخاطر مقبولة مبدئيا مع ضرورة التحقق من تفاصيل الحي والعقار."
+
+    if score >= 75 and deals >= min_deals * 3:
+        return "القرار: فرصة قابلة للدراسة الآن ضمن البيانات المتاحة."
+    if score >= 55:
+        return "القرار: فرصة واعدة، لكن تحتاج مقارنة بديلين قبل التحرك."
+    return "القرار: راقبها ولا تعتبرها أولوية إلا إذا كان لديك سبب محلي إضافي."
+
+
+def assistant_reasons(row: pd.Series, ranking: pd.DataFrame, mode: str) -> list[str]:
+    reasons: list[str] = []
+    rent = safe_float(row.get("average_rent", 0))
+    deals = safe_float(row.get("total_deals", 0))
+    score = safe_float(row.get("score", 0))
+    growth = row.get("growth_pct", pd.NA)
+
+    median_deals = float(ranking["total_deals"].median()) if "total_deals" in ranking and not ranking.empty else 0
+    median_rent = float(ranking["average_rent"].median()) if "average_rent" in ranking and not ranking.empty else 0
+
+    if score:
+        reasons.append(f"درجة الفرصة {score:,.1f} لأنها تجمع الطلب والنمو وجاذبية السعر.")
+    if median_deals and deals >= median_deals:
+        reasons.append(f"الطلب أعلى من وسيط النتائج المعروضة: {deals:,.0f} عقد.")
+    elif deals:
+        reasons.append(f"الطلب متاح لكنه ليس الأعلى بين البدائل: {deals:,.0f} عقد.")
+    if median_rent and rent <= median_rent:
+        reasons.append(f"متوسط الإيجار أقل من وسيط النتائج، ما يعزز جاذبية الدخول: {format_sar(rent)}.")
+    elif rent:
+        reasons.append(f"متوسط الإيجار أعلى نسبيا، لذلك يحتاج تبريرا من الموقع أو جودة الأصل: {format_sar(rent)}.")
+    if not pd.isna(growth):
+        growth_text = format_pct_text(float(growth))
+        if mode == "growth" or float(growth) > 0:
+            reasons.append(f"النمو المسجل {growth_text} مقارنة بالفترة السابقة المتاحة.")
+        else:
+            reasons.append(f"النمو الحالي {growth_text}، لذلك القرار يعتمد أكثر على الطلب والسعر.")
+    return reasons[:4]
+
+
+def assistant_warnings(row: pd.Series, ranking: pd.DataFrame, min_deals: int) -> list[str]:
+    warnings: list[str] = []
+    deals = safe_float(row.get("total_deals", 0))
+    growth = row.get("growth_pct", pd.NA)
+
+    if deals < min_deals * 2:
+        warnings.append("حجم العقود قريب من الحد الأدنى؛ ارفع الثقة بتوسيع الفترة أو خفض تفصيل الحي.")
+    if pd.isna(growth):
+        warnings.append("لا توجد مقارنة نمو كافية لهذا الكيان في فترتين موثوقتين.")
+    elif abs(float(growth)) >= 35:
+        warnings.append("النمو مرتفع أو منخفض بشكل حاد؛ قد يكون بسبب تغير عينة العقود لا تغير السوق فقط.")
+    if len(ranking) < 3:
+        warnings.append("عدد البدائل قليل داخل السؤال؛ المقارنة قد تكون ضيقة.")
+    return warnings[:3]
+
+
+def suggested_followups(location: str, property_type: str, mode: str) -> list[str]:
+    if mode == "compare":
+        return [
+            f"ما أفضل الأحياء داخل {location}؟",
+            "أين السعر أقل مع طلب قوي؟",
+            "ما أعلى نمو في نفس النطاق؟",
+        ]
+    return [
+        f"قارن {location} مع أقرب بديل",
+        f"أين الطلب أقوى لنوع {property_type}؟",
+        f"ما مخاطر {location}؟",
+    ]
+
+
+def default_followups() -> list[str]:
+    return [
+        "ما أفضل الفرص العقارية الآن؟",
+        "قارن الرياض وجدة للشقق السكنية",
+        "أين الطلب قوي والسعر أقل؟",
+    ]
+
+
 def render_assistant_answer(answer: dict[str, object]) -> None:
     facts = answer.get("facts", {})
     with st.container(border=True):
         st.subheader(str(answer["title"]))
+        decision = answer.get("decision")
+        if decision:
+            st.success(str(decision))
         st.write(str(answer["summary"]))
         st.caption(str(answer["method"]))
 
@@ -611,12 +877,31 @@ def render_assistant_answer(answer: dict[str, object]) -> None:
             for index, (label, value) in enumerate(facts.items()):
                 columns[index % len(columns)].metric(str(label), str(value))
 
+        reasons = answer.get("reasons", [])
+        if isinstance(reasons, list) and reasons:
+            st.markdown("**لماذا؟**")
+            for reason in reasons:
+                st.write(f"- {reason}")
+
+        warnings = answer.get("warnings", [])
+        if isinstance(warnings, list) and warnings:
+            st.markdown("**تنبيهات القرار**")
+            for warning in warnings:
+                st.warning(str(warning))
+
+        followups = answer.get("followups", [])
+        if isinstance(followups, list) and followups:
+            st.markdown("**أسئلة متابعة مقترحة**")
+            cols = st.columns(min(len(followups), 3))
+            for index, followup in enumerate(followups[:3]):
+                cols[index % len(cols)].caption(str(followup))
+
     table = answer.get("table")
     if isinstance(table, pd.DataFrame) and not table.empty:
-        render_assistant_table(table)
+        render_assistant_table(table, int(answer.get("limit", 8)))
 
 
-def render_assistant_table(table: pd.DataFrame) -> None:
+def render_assistant_table(table: pd.DataFrame, limit: int = 8) -> None:
     columns = [
         "region_ar",
         "city_ar",
@@ -628,7 +913,7 @@ def render_assistant_table(table: pd.DataFrame) -> None:
         "score",
     ]
     available = [column for column in columns if column in table.columns]
-    view = table[available].head(8).rename(
+    view = table[available].head(limit).rename(
         columns={
             "region_ar": "المنطقة",
             "city_ar": "المدينة",
@@ -765,17 +1050,24 @@ def apply_question_scope(data: pd.DataFrame, question: str) -> tuple[pd.DataFram
     matched_primary_place = False
     primary_norms: set[str] = set()
 
-    for column, label in [("region_ar", "المنطقة"), ("city_ar", "المدينة")]:
-        matches = matching_values(
-            data[column].dropna().unique(),
-            normalized,
-            allow_token_match=column == "region_ar",
-        )
-        if matches:
-            scoped = scoped[scoped[column].isin(matches)]
-            filters.append(f"{label}: {', '.join(matches[:3])}")
-            matched_primary_place = True
-            primary_norms.update(normalize_search_text(match) for match in matches)
+    region_matches = matching_values(
+        data["region_ar"].dropna().unique(),
+        normalized,
+        allow_token_match=True,
+    )
+    city_matches = matching_values(data["city_ar"].dropna().unique(), normalized)
+    if region_matches or city_matches:
+        primary_mask = pd.Series(False, index=data.index)
+        if region_matches:
+            primary_mask = primary_mask | data["region_ar"].isin(region_matches)
+            filters.append(f"المنطقة: {', '.join(region_matches[:3])}")
+            primary_norms.update(normalize_search_text(match) for match in region_matches)
+        if city_matches:
+            primary_mask = primary_mask | data["city_ar"].isin(city_matches)
+            filters.append(f"المدينة: {', '.join(city_matches[:3])}")
+            primary_norms.update(normalize_search_text(match) for match in city_matches)
+        scoped = data[primary_mask].copy()
+        matched_primary_place = True
 
     missing_places = missing_requested_places(data, normalized)
     if missing_places and not matched_primary_place:
@@ -901,6 +1193,10 @@ def missing_requested_places(data: pd.DataFrame, normalized_question: str) -> li
 
 def detect_question_mode(question: str) -> str:
     normalized = normalize_search_text(question)
+    if any(word in normalized for word in ["قارن", "مقارنه", "مقارنة", "ايهما", "افضل بين", "الفرق بين", "بين"]):
+        return "compare"
+    if any(word in normalized for word in ["مخاطر", "خطر", "ثقه", "ثقة", "امن", "آمن", "مضمون"]):
+        return "risk"
     if any(word in normalized for word in ["نمو", "صعود", "ارتفاع", "زخم"]):
         return "growth"
     if any(word in normalized for word in ["رخيص", "اقل", "أقل", "منخفض", "سعر مناسب", "جذاب"]):
