@@ -570,6 +570,9 @@ def render_decision_assistant(
     examples = [
         "اشرح لي وضع العزيزية بالتفصيل",
         "حلل حي النرجس: السعر والطلب والمخاطر",
+        "هل أشتري الآن أم أنتظر؟",
+        "كيف أقيم سعر عقار قبل الشراء؟",
+        "ما أهم مخاطر الاستثمار العقاري؟",
         "لدي 800 ألف ر.س، ما أفضل المناطق للاستثمار؟",
         "معي مليون ر.س، أين أبحث عن شقة في الرياض؟",
         "ما أفضل الفرص العقارية الآن؟",
@@ -615,6 +618,9 @@ def answer_decision_question(
 
     if mode == "compare":
         return answer_comparison_question(question, data, scoped, filters, min_deals, limit)
+
+    if is_general_real_estate_question(question):
+        return answer_general_real_estate_question(question, scoped, filters, settings, snapshot, limit)
 
     if mode == "growth":
         ranking = top_growth_markets(scoped, min_deals=min_deals).copy()
@@ -713,6 +719,294 @@ def answer_decision_question(
             "النمو": growth_text,
         },
     }
+
+
+def answer_general_real_estate_question(
+    question: str,
+    scoped: pd.DataFrame,
+    filters: list[str],
+    settings: dict[str, object],
+    snapshot: dict[str, object],
+    limit: int,
+) -> dict[str, object]:
+    min_deals = int(settings["min_deals"])
+    topic = general_real_estate_topic(question)
+    market = general_market_context(scoped, settings, snapshot, min_deals)
+    ranking = general_topic_table(scoped, topic, min_deals, limit)
+    filter_text = "، ".join(filters) if filters else "نطاق الفلاتر الحالي"
+
+    return {
+        "title": general_topic_title(topic),
+        "decision": general_topic_decision(topic, market, ranking),
+        "summary": general_topic_summary(topic, market, ranking, filter_text),
+        "method": (
+            "حللت السؤال كمستشار عقاري عام ثم ربطته بالمؤشرات المتاحة في قاعدة البيانات: "
+            "متوسط الإيجار، حجم العقود، النمو، السيولة، وترتيب الفرص. عند غياب بيانات البيع أستخدم المؤشرات الإيجارية كقراءة سوقية لا كتقييم رسمي."
+        ),
+        "filters": filters,
+        "table": ranking,
+        "reasons": general_topic_reasons(topic, market, ranking),
+        "warnings": general_topic_warnings(topic),
+        "followups": general_topic_followups(topic),
+        "limit": limit,
+        "facts": {
+            "آخر فترة": str(market.get("period", "-")),
+            "متوسط الإيجار": format_sar(safe_float(market.get("latest_avg", 0))),
+            "العقود": f"{safe_float(market.get('latest_deals', 0)):,.0f}",
+            "تغير السوق": format_pct_text(market.get("avg_delta")),
+        },
+    }
+
+
+def is_general_real_estate_question(question: str) -> bool:
+    normalized = normalize_search_text(question)
+    cues = [
+        "هل",
+        "كيف",
+        "متى",
+        "لماذا",
+        "ماذا عن",
+        "نصيحه",
+        "نصيحة",
+        "استراتيجيه",
+        "استراتيجية",
+        "اشتري",
+        "شراء",
+        "ابيع",
+        "بيع",
+        "انتظر",
+        "عائد",
+        "دخل",
+        "تدفق",
+        "تمويل",
+        "قرض",
+        "تفاوض",
+        "مخاطر",
+        "خطر",
+        "تقييم",
+        "قيم",
+        "سعر",
+        "متر",
+        "ايجار",
+        "إيجار",
+        "محفظه",
+        "محفظة",
+        "استثمار",
+    ]
+    excluded = ["اشرح", "حلل حي", "افضل الفرص", "أفضل الفرص", "افضل احياء", "أفضل أحياء"]
+    if any(item in normalized for item in [normalize_search_text(value) for value in excluded]):
+        return False
+    return any(cue in normalized for cue in [normalize_search_text(value) for value in cues])
+
+
+def general_real_estate_topic(question: str) -> str:
+    normalized = normalize_search_text(question)
+    if any(word in normalized for word in ["تقييم", "قيم", "سعر", "متر", "تفاوض", "عادل"]):
+        return "valuation"
+    if any(word in normalized for word in ["عائد", "دخل", "تدفق", "ايجار", "إيجار", "كاش فلو"]):
+        return "yield"
+    if any(word in normalized for word in ["مخاطر", "خطر", "امان", "آمان", "امن", "آمن"]):
+        return "risk"
+    if any(word in normalized for word in ["نوع عقار", "شقه", "شقة", "فيلا", "فلل", "دور", "دوبلكس"]):
+        return "property_type"
+    if any(word in normalized for word in ["اشتري", "شراء", "انتظر", "الان", "الآن", "توقيت"]):
+        return "buy_timing"
+    return "strategy"
+
+
+def general_market_context(
+    scoped: pd.DataFrame,
+    settings: dict[str, object],
+    snapshot: dict[str, object],
+    min_deals: int,
+) -> dict[str, object]:
+    trend = quarterly_trend(scoped, comparable=bool(settings["trend_comparable"]))
+    latest = trend.tail(1)
+    previous = trend.tail(2).head(1) if len(trend) >= 2 else pd.DataFrame()
+    latest_avg = safe_float(latest["average_rent"].iloc[0]) if not latest.empty else safe_float(snapshot.get("latest_avg", 0))
+    latest_deals = safe_float(latest["total_deals"].iloc[0]) if not latest.empty else safe_float(snapshot.get("latest_deals", 0))
+    prev_avg = safe_float(previous["average_rent"].iloc[0], float("nan")) if not previous.empty else float("nan")
+    prev_deals = safe_float(previous["total_deals"].iloc[0], float("nan")) if not previous.empty else float("nan")
+    scores = opportunity_scores(scoped, min_deals=min_deals).head(5).copy()
+    best = scores.iloc[0] if not scores.empty else None
+    return {
+        "period": period_label(scoped),
+        "latest_avg": latest_avg,
+        "latest_deals": latest_deals,
+        "avg_delta": pct_delta(latest_avg, prev_avg),
+        "deals_delta": pct_delta(latest_deals, prev_deals),
+        "scores": scores,
+        "best": best,
+        "locations": scoped["location_ar"].nunique() if "location_ar" in scoped else 0,
+        "property_types": scoped["property_type"].nunique() if "property_type" in scoped else 0,
+    }
+
+
+def general_topic_table(scoped: pd.DataFrame, topic: str, min_deals: int, limit: int) -> pd.DataFrame:
+    if scoped.empty:
+        return pd.DataFrame()
+
+    if topic == "property_type":
+        return general_property_type_ranking(scoped, min_deals).head(limit)
+    if topic == "yield":
+        ranking = opportunity_scores(scoped, min_deals=min_deals).copy()
+        if ranking.empty:
+            return ranking
+        ranking["income_rank"] = ranking["average_rent"].rank(pct=True)
+        ranking["score"] = (
+            ranking["income_rank"] * 45
+            + ranking.get("demand_rank", ranking["total_deals"].rank(pct=True)) * 35
+            + ranking.get("growth_rank", ranking["growth_pct"].fillna(0).rank(pct=True)) * 20
+        )
+        return ranking.sort_values("score", ascending=False).head(limit)
+    if topic == "risk":
+        ranking = opportunity_scores(scoped, min_deals=min_deals).copy()
+        if ranking.empty:
+            return ranking
+        ranking["risk_adjusted_score"] = (
+            ranking.get("demand_rank", ranking["total_deals"].rank(pct=True)) * 55
+            + ranking["growth_pct"].fillna(0).clip(lower=-20, upper=20).rank(pct=True) * 25
+            + ranking.get("affordability_rank", 1 - ranking["average_rent"].rank(pct=True)) * 20
+        )
+        ranking["score"] = ranking["risk_adjusted_score"]
+        return ranking.sort_values("score", ascending=False).head(limit)
+    return opportunity_scores(scoped, min_deals=min_deals).head(limit)
+
+
+def general_property_type_ranking(scoped: pd.DataFrame, min_deals: int) -> pd.DataFrame:
+    if scoped.empty:
+        return pd.DataFrame()
+    trend = aggregate_market(scoped, ["period_index", "period", "property_type"]).sort_values(
+        ["property_type", "period_index"]
+    )
+    if trend.empty:
+        return trend
+    grouped = trend.groupby("property_type", dropna=False)
+    trend["previous_period"] = grouped["period"].shift(1)
+    trend["previous_average_rent"] = grouped["average_rent"].shift(1)
+    trend["growth_pct"] = pct_series(trend["average_rent"], trend["previous_average_rent"])
+    latest = trend[trend["period_index"] == trend["period_index"].max()].copy()
+    latest = latest[latest["total_deals"] >= min_deals].copy()
+    if latest.empty:
+        return latest
+    latest["demand_rank"] = latest["total_deals"].rank(pct=True)
+    latest["growth_rank"] = latest["growth_pct"].fillna(0).clip(lower=-50, upper=50).rank(pct=True)
+    latest["score"] = latest["demand_rank"] * 55 + latest["growth_rank"] * 45
+    return latest.sort_values("score", ascending=False)
+
+
+def general_topic_title(topic: str) -> str:
+    titles = {
+        "buy_timing": "تحليل قرار الشراء أو الانتظار",
+        "valuation": "منهج تقييم سعر العقار",
+        "yield": "تحليل العائد والدخل الإيجاري",
+        "risk": "تحليل المخاطر العقارية",
+        "property_type": "تحليل نوع العقار الأنسب",
+        "strategy": "استشارة عقارية مبنية على البيانات",
+    }
+    return titles.get(topic, titles["strategy"])
+
+
+def general_topic_decision(topic: str, market: dict[str, object], ranking: pd.DataFrame) -> str:
+    avg_delta = market.get("avg_delta")
+    deals_delta = market.get("deals_delta")
+    best_text = best_ranking_text(ranking)
+    if topic == "buy_timing":
+        if avg_delta is not None and deals_delta is not None and avg_delta > 3 and deals_delta > 0:
+            return f"القرار: لا تنتظر السوق كله؛ ابحث عن صفقة محددة دون متوسط الحي. المؤشرات تميل للصعود مع نشاط عقود إيجابي. {best_text}"
+        if avg_delta is not None and avg_delta < -3:
+            return f"القرار: تفاوض بقوة ولا تستعجل؛ توجد إشارة هدوء في متوسط الإيجار. {best_text}"
+        return f"القرار: الشراء مناسب فقط عند وجود خصم أو عائد واضح، وليس لمجرد دخول السوق. {best_text}"
+    if topic == "valuation":
+        return "القرار: لا تقبل السعر قبل مقارنته بثلاث طبقات: متوسط الحي، العائد الإيجاري المتوقع، وحجم الطلب الفعلي في نفس نوع العقار."
+    if topic == "yield":
+        return f"القرار: ركز على الشرائح ذات إيجار مرتفع وسيولة قوية، لا على أعلى إيجار فقط. {best_text}"
+    if topic == "risk":
+        return "القرار: أخفض المخاطر باختيار حي لديه عقود كافية ونمو غير حاد، وتجنب القرارات المبنية على قفزة سعرية قصيرة."
+    if topic == "property_type":
+        return f"القرار: النوع الأفضل هو الذي يجمع عقودًا كثيرة ونموًا مقبولًا. {best_text}"
+    return f"القرار: ابدأ بالفرز الرقمي ثم تحقق ميدانيًا من العقار والشارع والخدمات. {best_text}"
+
+
+def general_topic_summary(topic: str, market: dict[str, object], ranking: pd.DataFrame, filter_text: str) -> str:
+    avg_delta = format_pct_text(market.get("avg_delta"))
+    deals_delta = format_pct_text(market.get("deals_delta"))
+    latest_avg = format_sar(safe_float(market.get("latest_avg", 0)))
+    latest_deals = safe_float(market.get("latest_deals", 0))
+    scope = f"{market.get('locations', 0):,.0f} موقع و{market.get('property_types', 0):,.0f} أنواع عقار"
+    topic_text = {
+        "buy_timing": "قراءة التوقيت تعتمد على اتجاه الإيجار وحجم العقود: صعود الإيجار مع نشاط العقود يدعم التحرك الانتقائي، أما الهبوط أو ضعف العقود فيدعم الانتظار أو التفاوض.",
+        "valuation": "التقييم الدقيق يبدأ من سعر المتر أو السعر الإجمالي، ثم يُقارن بالإيجار السنوي المتوقع وبمتوسط الحي ونشاط العقود.",
+        "yield": "العائد لا يعني أعلى إيجار فقط؛ المهم أن يكون الإيجار مدعومًا بسيولة عقود حتى لا يكون الرقم معزولًا.",
+        "risk": "المخاطر الأعلى غالبًا تأتي من قلة الصفقات، نمو حاد غير مستقر، أو سعر أعلى من السوق دون ميزة واضحة.",
+        "property_type": "اختيار نوع العقار يعتمد على توازن الطلب والنمو وسهولة التخارج، وليس على الانطباع العام.",
+        "strategy": "الاستراتيجية الأفضل تبدأ بتحديد الهدف: دخل إيجاري، نمو رأسمالي، أو حفظ رأس مال؛ ثم ترتيب الأحياء والأنواع وفق البيانات.",
+    }
+    return (
+        f"{topic_text.get(topic, topic_text['strategy'])} داخل {filter_text}، آخر فترة هي {market.get('period', '-')}. "
+        f"متوسط الإيجار المرجح {latest_avg}، وإجمالي العقود {latest_deals:,.0f}. "
+        f"تغير الإيجار {avg_delta} وتغير العقود {deals_delta}. نطاق القراءة يغطي {scope}."
+    )
+
+
+def general_topic_reasons(topic: str, market: dict[str, object], ranking: pd.DataFrame) -> list[str]:
+    reasons = [
+        f"اعتمدت على آخر فترة متاحة: {market.get('period', '-')}.",
+        f"حجم العقود في النطاق {safe_float(market.get('latest_deals', 0)):,.0f} عقد، وهو مؤشر سيولة أهم من السعر وحده.",
+    ]
+    avg_delta = market.get("avg_delta")
+    if avg_delta is not None:
+        reasons.append(f"اتجاه متوسط الإيجار في النطاق {format_pct_text(avg_delta)} مقارنة بالفترة السابقة.")
+    if not ranking.empty:
+        row = ranking.iloc[0]
+        label = row.get("location_ar", row.get("property_type", "-"))
+        reasons.append(
+            f"أعلى نتيجة في جدول التحليل: {label} بدرجة {safe_float(row.get('score', 0)):,.1f}."
+        )
+    if topic == "valuation":
+        reasons.append("قاعدة عملية: إذا كان السعر أعلى من متوسط الحي، يجب أن يبرره عائد أعلى أو موقع أدق أو جودة أصل واضحة.")
+    elif topic == "risk":
+        reasons.append("المؤشر يقلل الثقة في الشرائح ذات عقود قليلة أو نمو حاد؛ لأنها قد تعكس عينة صغيرة لا تغيرًا حقيقيًا.")
+    elif topic == "yield":
+        reasons.append("العائد يحتاج اختبارًا بسعر شراء فعلي؛ البيانات الحالية تعطي قوة الإيجار لا سعر البيع النهائي.")
+    return reasons[:5]
+
+
+def general_topic_warnings(topic: str) -> list[str]:
+    warnings = [
+        "البيانات الحالية إيجارية؛ لا تحتوي أسعار بيع فعلية أو سعر متر شراء، لذلك لا تعتبر تقييمًا رسميًا.",
+        "أي قرار شراء يحتاج فحص العقار والشارع والخدمات والتمويل ورسوم الصيانة قبل التنفيذ.",
+    ]
+    if topic == "buy_timing":
+        warnings.append("قرار التوقيت لا يُحسم من اتجاه السوق العام فقط؛ الصفقة الجيدة قد تظهر حتى في سوق مرتفع.")
+    if topic == "valuation":
+        warnings.append("لا تقارن عقارًا مفروشًا أو مجددًا بعقار عادي دون تعديل السعر والجودة.")
+    if topic == "risk":
+        warnings.append("ارتفاع العائد قد يكون تعويضًا عن مخاطر أعلى مثل ضعف الموقع أو صعوبة التأجير.")
+    return warnings[:4]
+
+
+def general_topic_followups(topic: str) -> list[str]:
+    followups = {
+        "buy_timing": ["ما أفضل الأحياء للتحرك الآن؟", "لدي 900 ألف أين أبحث؟", "اشرح لي وضع النرجس"],
+        "valuation": ["قيّم عقار في النرجس سعره 1.2 مليون", "كيف أعرف أن السعر مبالغ؟", "ما متوسط إيجار الحي؟"],
+        "yield": ["ما أعلى عائد تقديري؟", "لدي 800 ألف ما أفضل المناطق؟", "قارن الشقق والفلل للعائد"],
+        "risk": ["ما مخاطر حي العزيزية؟", "أين الطلب قوي والسعر أقل؟", "قارن النرجس والعارض"],
+        "property_type": ["هل الشقق أفضل من الفلل؟", "أفضل نوع عقار في الرياض", "ما أكثر نوع عليه طلب؟"],
+        "strategy": ["ابن لي استراتيجية استثمار", "ما أفضل الفرص الآن؟", "اشرح لي وضع العزيزية"],
+    }
+    return followups.get(topic, followups["strategy"])
+
+
+def best_ranking_text(ranking: pd.DataFrame) -> str:
+    if ranking.empty:
+        return ""
+    row = ranking.iloc[0]
+    if "location_ar" in row:
+        return f"أقوى مرشح حاليًا: {row.get('location_ar')} | {row.get('property_type', '-') }."
+    if "property_type" in row:
+        return f"أقوى نوع حاليًا: {row.get('property_type')}."
+    return ""
 
 
 def answer_neighborhood_profile(
