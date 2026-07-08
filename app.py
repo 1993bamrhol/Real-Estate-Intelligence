@@ -1466,6 +1466,14 @@ def neighborhood_label(row: pd.Series) -> str:
     return location.replace("الرياض -", "").strip() or "غير محدد"
 
 
+def riyadh_neighborhood_options(riyadh: pd.DataFrame) -> list[str]:
+    if riyadh.empty:
+        return ["النرجس"]
+    labels = riyadh.apply(neighborhood_label, axis=1)
+    options = sorted({label for label in labels if label and label != "غير محدد"})
+    return options or ["النرجس"]
+
+
 def render_riyadh_price_heatmap(market: pd.DataFrame) -> None:
     top_neighborhoods = (
         market.groupby("neighborhood")["total_deals"]
@@ -1589,9 +1597,16 @@ def render_property_valuation_engine(riyadh: pd.DataFrame) -> None:
     st.caption("أدخل السعر والمساحة والحي، ثم قارن السعر المطلوب بمتوسط الحي التقديري. هذا تقييم أولي للمفاضلة والتفاوض وليس تقييمًا رسميًا.")
 
     left, right = st.columns([1.05, 1])
+    neighborhoods = riyadh_neighborhood_options(riyadh)
+    default_neighborhood = neighborhoods.index("النرجس") if "النرجس" in neighborhoods else 0
     with left:
         st.selectbox("المدينة", ["الرياض"], index=0, disabled=True, key="valuation_city")
-        district = st.text_input("الحي", value="النرجس", key="valuation_district")
+        district = st.selectbox(
+            "الحي",
+            neighborhoods,
+            index=default_neighborhood,
+            key="valuation_district",
+        )
         price = st.number_input(
             "السعر المطلوب (ر.س)",
             min_value=0,
