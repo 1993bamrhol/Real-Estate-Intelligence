@@ -1548,12 +1548,10 @@ def render_investment_opportunities(scores: pd.DataFrame) -> None:
 
     top = scores.head(10).copy()
     cards = top.head(3)
-    st.markdown(
-        '<section class="decision-grid">'
-        + "".join(opportunity_card_html(row, index + 1) for index, (_, row) in enumerate(cards.iterrows()))
-        + "</section>",
-        unsafe_allow_html=True,
-    )
+    cols = st.columns(min(len(cards), 3))
+    for index, (_, row) in enumerate(cards.iterrows()):
+        with cols[index % len(cols)]:
+            render_opportunity_card(row, index + 1)
 
     view = top.assign(
         **{
@@ -1585,30 +1583,23 @@ def render_investment_opportunities(scores: pd.DataFrame) -> None:
     )
 
 
-def opportunity_card_html(row: pd.Series, rank: int) -> str:
-    neighborhood = escape(str(row.get("neighborhood", "-")))
-    property_type = escape(str(row.get("property_type", "-")))
+def render_opportunity_card(row: pd.Series, rank: int) -> None:
+    neighborhood = str(row.get("neighborhood", "-"))
+    property_type = str(row.get("property_type", "-"))
     score = safe_float(row.get("property_score", 0))
     rent = format_sar(safe_float(row.get("average_rent", 0)))
     deals = safe_float(row.get("total_deals", 0))
     growth = format_pct_text(row.get("growth_pct"))
     gap = format_pct_text(row.get("price_gap_pct"))
-    reason = escape(investment_reason(row))
-    recommendation = escape(score_recommendation(score))
-    return f"""
-        <article class="decision-card">
-            <div class="score-badge">{score:,.1f}/100</div>
-            <h3>{rank}- {neighborhood} | {property_type}</h3>
-            <p>{reason}</p>
-            <p><b>{recommendation}</b></p>
-            <div class="decision-meta">
-                <span>متوسط الإيجار<b>{escape(rent)}</b></span>
-                <span>العقود<b>{deals:,.0f}</b></span>
-                <span>النمو<b>{escape(growth)}</b></span>
-                <span>الفارق<b>{escape(gap)}</b></span>
-            </div>
-        </article>
-    """
+    with st.container(border=True):
+        st.metric(f"{rank}- {neighborhood} | {property_type}", f"{score:,.1f}/100")
+        st.write(investment_reason(row))
+        st.info(score_recommendation(score))
+        metric_cols = st.columns(2)
+        metric_cols[0].metric("متوسط الإيجار", rent)
+        metric_cols[1].metric("العقود", f"{deals:,.0f}")
+        metric_cols[0].metric("النمو", growth)
+        metric_cols[1].metric("الفارق", gap)
 
 
 def investment_reason(row: pd.Series) -> str:
@@ -1648,20 +1639,12 @@ def render_market_alerts(scores: pd.DataFrame) -> None:
     if not alerts:
         return
     st.markdown("### تنبيهات سوق تعطي سببًا للعودة")
-    st.markdown(
-        '<section class="alert-grid">'
-        + "".join(
-            f"""
-            <article class="alert-card">
-                <h3>{escape(alert["title"])}</h3>
-                <p>{escape(alert["body"])}</p>
-            </article>
-            """
-            for alert in alerts
-        )
-        + "</section>",
-        unsafe_allow_html=True,
-    )
+    cols = st.columns(min(len(alerts), 4))
+    for index, alert in enumerate(alerts):
+        with cols[index % len(cols)]:
+            with st.container(border=True):
+                st.markdown(f"**{alert['title']}**")
+                st.write(alert["body"])
 
 
 def market_alerts(scores: pd.DataFrame) -> list[dict[str, str]]:
@@ -1852,7 +1835,10 @@ def render_ai_report_generator(
         st.session_state["investor_report_text"] = report
 
     report_text = str(st.session_state["investor_report_text"])
-    st.text_area("تقرير المستثمر", value=report_text, height=360)
+    with st.container(border=True):
+        st.markdown(report_text)
+    with st.expander("النص الخام للتقرير", expanded=False):
+        st.text_area("نسخة Markdown", value=report_text, height=280)
     period = period_label(riyadh).replace(" ", "-") or "latest"
     st.download_button(
         "تحميل التقرير",
