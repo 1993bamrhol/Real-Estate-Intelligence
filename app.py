@@ -561,6 +561,8 @@ def render_decision_assistant(
     st.caption("اسأل كمحلل استثماري: مقارنة أحياء، قوة الطلب، المخاطر، السعر المناسب، أو أين توجد فرصة قابلة للدراسة.")
 
     examples = [
+        "لدي 800 ألف ر.س، ما أفضل المناطق للاستثمار؟",
+        "معي مليون ر.س، أين أبحث عن شقة في الرياض؟",
         "ما أفضل الفرص العقارية الآن؟",
         "أفضل أحياء الرياض للشقق السكنية",
         "قارن الرياض وجدة للشقق السكنية",
@@ -576,7 +578,7 @@ def render_decision_assistant(
         question = st.text_input(
             "اكتب سؤالك",
             value=selected_question,
-            placeholder="مثال: أفضل فرص جدة للفلل السكنية",
+            placeholder="مثال: لدي 800 ألف ر.س، ما أفضل المناطق للاستثمار؟",
         )
 
     answer = answer_decision_question(question, data, settings, snapshot)
@@ -593,6 +595,10 @@ def answer_decision_question(
     min_deals = int(settings["min_deals"])
     mode = detect_question_mode(question)
     limit = requested_result_limit(question)
+    budget = extract_investment_budget(question)
+
+    if budget is not None:
+        return answer_budget_question(question, scoped, filters, min_deals, limit, budget)
 
     if mode == "compare":
         return answer_comparison_question(question, data, scoped, filters, min_deals, limit)
@@ -694,6 +700,226 @@ def answer_decision_question(
             "النمو": growth_text,
         },
     }
+
+
+def answer_budget_question(
+    question: str,
+    scoped: pd.DataFrame,
+    filters: list[str],
+    min_deals: int,
+    limit: int,
+    budget: float,
+) -> dict[str, object]:
+    source, budget_filters = budget_analysis_scope(scoped, question, budget)
+    ranking = budget_opportunity_ranking(source, min_deals, budget).head(limit).copy()
+    budget_text = format_sar(budget)
+    filter_items = [*filters, *budget_filters, f"رأس المال: {budget_text}"]
+    filter_text = "، ".join(filter_items) if filter_items else "حسب الفلاتر الحالية"
+
+    if ranking.empty:
+        return {
+            "title": "لا توجد نتيجة كافية لهذه الميزانية",
+            "summary": (
+                f"لم أجد شرائح تتجاوز حد العقود الحالي لتحليل ميزانية {budget_text}. "
+                "جرّب تحديد مدينة أوسع أو خفض حد العقود من الفلاتر."
+            ),
+            "method": "تم البحث في قاعدة البيانات عن شرائح لديها متوسط إيجار وعدد عقود كافيين، ثم لم تظهر عينة قابلة للترتيب.",
+            "filters": filter_items,
+            "table": ranking,
+            "facts": {"الميزانية": budget_text},
+            "reasons": [],
+            "warnings": ["البيانات الحالية إيجارية؛ لا تحتوي سعر بيع فعلي لكل عقار."],
+            "followups": budget_followups(budget),
+            "limit": limit,
+        }
+
+    best = ranking.iloc[0]
+    location = str(best.get("location_ar", "-"))
+    property_type = str(best.get("property_type", "-"))
+    score = safe_float(best.get("budget_fit_score", 0))
+    rent = safe_float(best.get("average_rent", 0))
+    deals = safe_float(best.get("total_deals", 0))
+    yield_pct = safe_float(best.get("budget_yield_pct", 0))
+    growth = best.get("growth_pct", pd.NA)
+    growth_text = "-" if pd.isna(growth) else format_pct_text(float(growth))
+    top_names = "، ".join(
+        f"{row.get('location_ar', '-')}" for _, row in ranking.head(3).iterrows()
+    )
+
+    return {
+        "title": f"تحليل ميزانية {budget_text}",
+        "decision": (
+            f"الأفضل مبدئيًا حسب قاعدة البيانات: {location} لنوع {property_type}. "
+            f"هذه توصية فرز أولي وليست تأكيدًا أن سعر الشراء متاح بهذا الرقم."
+        ),
+        "summary": (
+            f"بناءً على ميزانية {budget_text}، أفضل المناطق/الشرائح المرشحة هي: {top_names}. "
+            f"النتيجة الأولى تعطي عائدًا إيجاريًا تقديريًا {yield_pct:,.2f}% إذا كان رأس المال كاملًا هو سعر الدخول، "
+            f"مع {deals:,.0f} عقد ونمو {growth_text}. نطاق الإجابة: {filter_text}."
+        ),
+        "method": (
+            "حللت قاعدة البيانات الحالية بترتيب الشرائح حسب متوسط الإيجار السنوي مقابل رأس المال، "
+            "قوة الطلب، النمو، وجاذبية السعر النسبية. لا أتعامل معها كتقييم بيع رسمي لأن مصدر البيانات الحالي إيجاري."
+        ),
+        "filters": filter_items,
+        "table": ranking,
+        "reasons": budget_reasons(best, ranking, budget),
+        "warnings": [
+            "البيانات الحالية لا تحتوي أسعار بيع فعلية أو سعر متر شراء؛ لذلك العائد هنا تقديري مبني على الإيجار فقط.",
+            "قبل الشراء قارن سعر الصفقة الفعلي بمتوسط الحي، وحالة العقار، والشارع، والخدمات.",
+        ],
+        "followups": budget_followups(budget),
+        "limit": limit,
+        "facts": {
+            "الميزانية": budget_text,
+            "أفضل درجة": f"{score:,.1f}",
+            "عائد تقديري": f"{yield_pct:,.2f}%",
+            "العقود": f"{deals:,.0f}",
+        },
+    }
+
+
+def budget_opportunity_ranking(frame: pd.DataFrame, min_deals: int, budget: float) -> pd.DataFrame:
+    if frame.empty or budget <= 0:
+        return pd.DataFrame()
+
+    ranking = opportunity_scores(frame, min_deals=min_deals).copy()
+    if ranking.empty:
+        return ranking
+
+    ranking = ranking.dropna(subset=["average_rent", "total_deals"]).copy()
+    if ranking.empty:
+        return ranking
+
+    ranking["estimated_annual_rent"] = pd.to_numeric(ranking["average_rent"], errors="coerce")
+    ranking["budget_yield_pct"] = ranking["estimated_annual_rent"] / budget * 100
+    ranking["yield_rank"] = ranking["budget_yield_pct"].clip(lower=0, upper=9).rank(pct=True)
+
+    if "demand_rank" not in ranking:
+        ranking["demand_rank"] = ranking["total_deals"].rank(pct=True)
+    if "growth_rank" not in ranking:
+        ranking["growth_rank"] = ranking["growth_pct"].fillna(0).clip(lower=-50, upper=50).rank(pct=True)
+    if "affordability_rank" not in ranking:
+        ranking["affordability_rank"] = 1 - ranking["average_rent"].rank(pct=True)
+
+    ranking["budget_fit_score"] = (
+        ranking["yield_rank"] * 38
+        + ranking["demand_rank"] * 28
+        + ranking["growth_rank"] * 22
+        + ranking["affordability_rank"] * 12
+    ).clip(lower=0, upper=100)
+    ranking["score"] = ranking["budget_fit_score"]
+    ranking["budget_note"] = ranking.apply(budget_row_note, axis=1)
+    return ranking.sort_values("budget_fit_score", ascending=False)
+
+
+def budget_analysis_scope(
+    frame: pd.DataFrame,
+    question: str,
+    budget: float,
+) -> tuple[pd.DataFrame, list[str]]:
+    if frame.empty or "property_type" not in frame.columns:
+        return frame, []
+
+    normalized = normalize_search_text(question)
+    explicit_types = matching_property_types(frame["property_type"].dropna().unique(), normalized)
+    if explicit_types:
+        return frame, []
+
+    property_types = set(frame["property_type"].dropna().astype(str))
+    if budget <= 1_500_000 and "شقة" in property_types:
+        return frame[frame["property_type"].eq("شقة")].copy(), ["نوع العقار الافتراضي: شقة"]
+
+    residential_types = [value for value in ["شقة", "دور", "دوبلاكس", "فيلا"] if value in property_types]
+    if residential_types:
+        return frame[frame["property_type"].isin(residential_types)].copy(), ["النطاق: العقارات السكنية"]
+
+    return frame, []
+
+
+def budget_row_note(row: pd.Series) -> str:
+    yield_pct = safe_float(row.get("budget_yield_pct", 0))
+    demand_rank = safe_float(row.get("demand_rank", 0))
+    if yield_pct >= 5 and demand_rank >= 0.65:
+        return "عائد وطلب قويان"
+    if yield_pct >= 4:
+        return "عائد مقبول يحتاج تحقق"
+    if demand_rank >= 0.75:
+        return "طلب قوي لكن العائد أقل"
+    return "فرصة مراقبة"
+
+
+def budget_reasons(row: pd.Series, ranking: pd.DataFrame, budget: float) -> list[str]:
+    reasons = assistant_reasons(row, ranking, "opportunity")
+    yield_pct = safe_float(row.get("budget_yield_pct", 0))
+    rent = safe_float(row.get("estimated_annual_rent", row.get("average_rent", 0)))
+    reasons.insert(
+        0,
+        f"إذا اعتبرنا {format_sar(budget)} رأس مال للدخول، فإن متوسط الإيجار السنوي يعطي عائدًا تقديريًا {yield_pct:,.2f}% ({format_sar(rent)} سنويًا).",
+    )
+    note = str(row.get("budget_note", ""))
+    if note:
+        reasons.append(f"قراءة الميزانية: {note}.")
+    return reasons[:5]
+
+
+def budget_followups(budget: float) -> list[str]:
+    budget_text = format_sar(budget)
+    return [
+        f"حلل {budget_text} للشقق فقط في الرياض",
+        f"ما أعلى عائد تقديري لميزانية {budget_text}؟",
+        f"قارن أفضل حيّين لميزانية {budget_text}",
+    ]
+
+
+def extract_investment_budget(question: str) -> float | None:
+    text = (
+        arabic_digits_to_western(str(question))
+        .replace(",", "")
+        .replace("٬", "")
+        .replace("٫", ".")
+    )
+    normalized = normalize_search_text(text)
+    search_text = text.lower()
+    has_budget_cue = any(
+        cue in normalized
+        for cue in [
+            "لدي",
+            "معي",
+            "ميزانيه",
+            "ميزانية",
+            "راس المال",
+            "رأس المال",
+            "استثمر",
+            "استثمار",
+            "مبلغ",
+            "كاش",
+        ]
+    )
+
+    pattern = re.compile(r"(\d+(?:\.\d+)?)\s*(الف|ألف|الاف|ألاف|آلاف|مليون|ملايين|مليونين|k|m)?")
+    candidates: list[float] = []
+    for match in pattern.finditer(search_text):
+        value = float(match.group(1))
+        suffix = match.group(2) or ""
+        if suffix in {"الف", "ألف", "الاف", "ألاف", "آلاف", "k"}:
+            value *= 1_000
+        elif suffix in {"مليون", "ملايين", "مليونين", "m"}:
+            value *= 1_000_000
+        elif has_budget_cue and 100 <= value < 10_000:
+            value *= 1_000
+
+        if value >= 100_000 and (has_budget_cue or suffix or value >= 500_000):
+            candidates.append(value)
+
+    if not candidates:
+        return None
+    return max(candidates)
+
+
+def arabic_digits_to_western(text: str) -> str:
+    translation = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
+    return text.translate(translation)
 
 
 def answer_comparison_question(
@@ -982,11 +1208,16 @@ def render_assistant_table(table: pd.DataFrame, limit: int = 8) -> None:
         "location_ar",
         "property_type",
         "average_rent",
+        "budget_yield_pct",
         "total_deals",
         "growth_pct",
+        "budget_fit_score",
         "score",
+        "budget_note",
     ]
     available = [column for column in columns if column in table.columns]
+    if "budget_fit_score" in available and "score" in available:
+        available.remove("score")
     view = table[available].head(limit).rename(
         columns={
             "region_ar": "المنطقة",
@@ -994,15 +1225,20 @@ def render_assistant_table(table: pd.DataFrame, limit: int = 8) -> None:
             "location_ar": "الموقع",
             "property_type": "نوع العقار",
             "average_rent": "متوسط الإيجار",
+            "budget_yield_pct": "عائد تقديري %",
             "total_deals": "العقود",
             "growth_pct": "النمو %",
+            "budget_fit_score": "ملاءمة الميزانية",
             "score": "الدرجة",
+            "budget_note": "قراءة الميزانية",
         }
     )
     formatters = {
         "متوسط الإيجار": "{:,.0f}",
+        "عائد تقديري %": "{:,.2f}",
         "العقود": "{:,.0f}",
         "النمو %": "{:,.1f}",
+        "ملاءمة الميزانية": "{:,.1f}",
         "الدرجة": "{:,.1f}",
     }
     st.dataframe(
