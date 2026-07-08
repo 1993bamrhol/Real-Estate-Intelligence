@@ -484,8 +484,8 @@ def render_decision_assistant(
     settings: dict[str, object],
     snapshot: dict[str, object],
 ) -> None:
-    st.subheader("مساعد القرار العقاري")
-    st.caption("اسأل عن أفضل الفرص، أعلى نمو، قوة الطلب، أو المدن والأحياء المناسبة لنوع عقار محدد.")
+    st.subheader("المحلل العقاري الذكي")
+    st.caption("اسأل كمحلل استثماري: مقارنة أحياء، قوة الطلب، المخاطر، السعر المناسب، أو أين توجد فرصة قابلة للدراسة.")
 
     examples = [
         "ما أفضل الفرص العقارية الآن؟",
@@ -493,6 +493,7 @@ def render_decision_assistant(
         "قارن الرياض وجدة للشقق السكنية",
         "أين الطلب قوي والسعر أقل؟",
         "ما مخاطر أفضل فرصة؟",
+        "حلل أفضل حي في الرياض للشقق",
         "ما أعلى المواقع نموا؟",
     ]
     left, right = st.columns([1, 2.3])
@@ -1594,7 +1595,7 @@ def render_riyadh_neighborhood_comparison(market: pd.DataFrame) -> None:
 
 def render_property_valuation_engine(riyadh: pd.DataFrame) -> None:
     st.subheader("محرك تقييم عقار سريع")
-    st.caption("أدخل السعر والمساحة والحي، ثم قارن السعر المطلوب بمتوسط الحي التقديري. هذا تقييم أولي للمفاضلة والتفاوض وليس تقييمًا رسميًا.")
+    st.caption("أدخل السعر والمساحة والحي ونوع العقار. المحلل يربط السعر بمؤشرات الإيجار والطلب في الحي، مع بقاء فرق السعر عن متوسط الحي مدخلًا يدويًا إذا كان متاحًا لديك.")
 
     left, right = st.columns([1.05, 1])
     neighborhoods = riyadh_neighborhood_options(riyadh)
@@ -1606,6 +1607,14 @@ def render_property_valuation_engine(riyadh: pd.DataFrame) -> None:
             neighborhoods,
             index=default_neighborhood,
             key="valuation_district",
+        )
+        property_options = neighborhood_property_type_options(riyadh, district)
+        default_type = property_options.index("شقة") if "شقة" in property_options else 0
+        property_type = st.selectbox(
+            "نوع العقار",
+            property_options,
+            index=default_type,
+            key="valuation_property_type",
         )
         price = st.number_input(
             "السعر المطلوب (ر.س)",
@@ -1629,13 +1638,21 @@ def render_property_valuation_engine(riyadh: pd.DataFrame) -> None:
             key="valuation_gap_pct",
         )
 
-    result = evaluate_property_price(float(price), float(area), float(market_gap_pct))
+    market = district_market_snapshot(riyadh, district, property_type)
+    result = evaluate_property_price(float(price), float(area), float(market_gap_pct), market)
     with right:
         st.metric("السعر لكل م²", f"{result['price_per_sqm']:,.0f} ر.س")
-        st.metric("متوسط الحي التقديري", format_sar(result["estimated_market_price"]))
-        st.metric("الفارق عن المتوسط", format_sar(result["premium_amount"]), f"{market_gap_pct:+.1f}%")
+        st.metric("متوسط إيجار الحي", format_sar(market["average_rent"]))
+        st.metric("العائد الإيجاري التقريبي", f"{result['gross_yield_pct']:,.2f}%", f"{result['payback_years']:,.1f} سنة")
+        st.metric("العقود في آخر فترة", f"{market['total_deals']:,.0f}", market["period"])
 
-        status, message = valuation_message(float(market_gap_pct), result["negotiation_to_fair"])
+        st.metric(
+            "فارق السعر عن متوسط الحي",
+            format_sar(result["premium_amount"]),
+            f"{market_gap_pct:+.1f}%",
+        )
+
+        status, message = valuation_message(float(market_gap_pct), result["negotiation_to_fair"], result, market)
         if status == "good":
             st.success(message)
         elif status == "watch":
@@ -1643,17 +1660,88 @@ def render_property_valuation_engine(riyadh: pd.DataFrame) -> None:
         else:
             st.warning(message)
 
-        context = district_rental_context(riyadh, district)
-        if context:
-            st.caption(context)
+        st.markdown("**رأي المحلل العقاري**")
+        st.write(real_estate_analyst_opinion(district, property_type, result, market))
+        st.caption(district_rental_context(riyadh, district, property_type))
 
 
-def evaluate_property_price(price: float, area: float, market_gap_pct: float) -> dict[str, float]:
+def neighborhood_property_type_options(riyadh: pd.DataFrame, district: str) -> list[str]:
+    matches = district_rows(riyadh, district)
+    if matches.empty:
+        values = riyadh["property_type"].dropna().astype(str).str.strip()
+    else:
+        values = matches["property_type"].dropna().astype(str).str.strip()
+    options = sorted({value for value in values if value})
+    return options or ["شقة"]
+
+
+def district_rows(riyadh: pd.DataFrame, district: str) -> pd.DataFrame:
+    normalized = normalize_search_text(district)
+    if riyadh.empty or not normalized:
+        return riyadh.iloc[0:0].copy()
+
+    district_mask = riyadh["location_ar"].map(normalize_search_text).str.contains(
+        normalized,
+        na=False,
+        regex=False,
+    )
+    if "district_ar" in riyadh.columns:
+        district_mask = district_mask | riyadh["district_ar"].map(normalize_search_text).str.contains(
+            normalized,
+            na=False,
+            regex=False,
+        )
+    return riyadh[district_mask].copy()
+
+
+def district_market_snapshot(riyadh: pd.DataFrame, district: str, property_type: str) -> dict[str, object]:
+    latest_period = riyadh["period_index"].max()
+    latest = riyadh[riyadh["period_index"] == latest_period].copy()
+    latest["neighborhood"] = latest.apply(neighborhood_label, axis=1)
+
+    rows = district_rows(latest, district)
+    typed = rows[rows["property_type"].eq(property_type)].copy()
+    if typed.empty:
+        typed = rows.copy()
+
+    city_type = latest[latest["property_type"].eq(property_type)].copy()
+    city_avg = weighted_average(city_type, "average_rent", "total_deals") if not city_type.empty else float("nan")
+    avg_rent = weighted_average(typed, "average_rent", "total_deals") if not typed.empty else float("nan")
+    total_deals = float(typed["total_deals"].sum()) if not typed.empty else 0
+    rent_gap_pct = pct_delta(avg_rent, city_avg)
+
+    market = riyadh_neighborhood_market(riyadh, 1)
+    same_type = market[market["property_type"].eq(property_type)].copy()
+    selected = same_type[same_type["neighborhood"].map(normalize_search_text).eq(normalize_search_text(district))]
+    score = safe_float(selected["score"].max(), 0) if not selected.empty else 0
+    demand_rank = safe_float(selected["demand_rank"].max(), 0) if not selected.empty else 0
+
+    return {
+        "average_rent": avg_rent,
+        "city_average_rent": city_avg,
+        "rent_gap_pct": rent_gap_pct,
+        "total_deals": total_deals,
+        "period": period_label(latest),
+        "score": score,
+        "demand_rank": demand_rank,
+        "rows": len(typed),
+    }
+
+
+def evaluate_property_price(
+    price: float,
+    area: float,
+    market_gap_pct: float,
+    market: dict[str, object],
+) -> dict[str, float]:
     area = max(area, 1)
     market_multiplier = 1 + (market_gap_pct / 100)
     estimated_market_price = price / market_multiplier if market_multiplier > 0 else price
     premium_amount = price - estimated_market_price
     acceptable_price = estimated_market_price * 1.03
+    annual_rent = safe_float(market.get("average_rent", 0))
+    gross_yield_pct = (annual_rent / price * 100) if price > 0 and annual_rent > 0 else 0
+    payback_years = (price / annual_rent) if annual_rent > 0 else 0
     return {
         "price_per_sqm": price / area,
         "estimated_market_price": estimated_market_price,
@@ -1661,13 +1749,24 @@ def evaluate_property_price(price: float, area: float, market_gap_pct: float) ->
         "premium_amount": premium_amount,
         "negotiation_to_fair": max(premium_amount, 0),
         "negotiation_to_acceptable": max(price - acceptable_price, 0),
+        "gross_yield_pct": gross_yield_pct,
+        "payback_years": payback_years,
     }
 
 
-def valuation_message(market_gap_pct: float, negotiation_to_fair: float) -> tuple[str, str]:
+def valuation_message(
+    market_gap_pct: float,
+    negotiation_to_fair: float,
+    result: dict[str, float],
+    market: dict[str, object],
+) -> tuple[str, str]:
+    yield_pct = result["gross_yield_pct"]
+    demand_rank = safe_float(market.get("demand_rank", 0))
     if market_gap_pct <= -5:
         return "good", f"السعر أقل من متوسط الحي بنحو {abs(market_gap_pct):.1f}%؛ هذه إشارة سعرية جيدة إذا كانت حالة العقار مناسبة."
     if market_gap_pct <= 5:
+        if yield_pct >= 4 or demand_rank >= 0.75:
+            return "good", "السعر قريب من متوسط الحي، ومؤشرات الطلب أو العائد تدعم دراسة العقار بجدية."
         return "watch", "السعر قريب من متوسط الحي؛ القرار يعتمد على جودة العقار، الشارع، والخدمات القريبة."
     if market_gap_pct <= 12:
         return (
@@ -1680,21 +1779,45 @@ def valuation_message(market_gap_pct: float, negotiation_to_fair: float) -> tupl
     )
 
 
-def district_rental_context(riyadh: pd.DataFrame, district: str) -> str:
-    normalized = normalize_search_text(district)
-    if not normalized:
+def real_estate_analyst_opinion(
+    district: str,
+    property_type: str,
+    result: dict[str, float],
+    market: dict[str, object],
+) -> str:
+    yield_pct = result["gross_yield_pct"]
+    rent_gap = market.get("rent_gap_pct")
+    deals = safe_float(market.get("total_deals", 0))
+    score = safe_float(market.get("score", 0))
+
+    if yield_pct >= 4.5 and score >= 65:
+        action = "النتيجة إيجابية: الحي ونوع العقار يظهران طلبًا جيدًا والعائد الإيجاري مقبول."
+    elif yield_pct >= 3.5 and deals >= 50:
+        action = "النتيجة متوسطة إلى جيدة: الطلب موجود، لكن القرار يحتاج تفاوضًا أو ميزة في العقار."
+    else:
+        action = "النتيجة تحتاج حذرًا: السعر الحالي لا يعطي عائدًا قويًا مقارنة بمؤشرات الإيجار."
+
+    rent_text = ""
+    if rent_gap is not None:
+        rent_text = f" متوسط إيجار {property_type} في {district} يختلف عن متوسط الرياض بنحو {format_pct_text(rent_gap)}."
+
+    return (
+        f"{action} العائد التقريبي {yield_pct:,.2f}%، وعدد العقود {deals:,.0f} في آخر فترة."
+        f"{rent_text}"
+    )
+
+
+def district_rental_context(riyadh: pd.DataFrame, district: str, property_type: str | None = None) -> str:
+    rows = district_rows(riyadh, district)
+    if rows.empty:
         return ""
 
-    latest_period = riyadh["period_index"].max()
-    latest = riyadh[riyadh["period_index"] == latest_period].copy()
-    district_mask = latest["location_ar"].map(normalize_search_text).str.contains(normalized, na=False, regex=False)
-    if "district_ar" in latest.columns:
-        district_mask = district_mask | latest["district_ar"].map(normalize_search_text).str.contains(
-            normalized,
-            na=False,
-            regex=False,
-        )
-    matches = latest[district_mask]
+    latest_period = rows["period_index"].max()
+    matches = rows[rows["period_index"] == latest_period].copy()
+    if property_type:
+        typed = matches[matches["property_type"].eq(property_type)].copy()
+        if not typed.empty:
+            matches = typed
     if matches.empty:
         return "لا توجد إشارة إيجارية كافية لهذا الحي في آخر فترة ضمن البيانات الحالية."
 
