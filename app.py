@@ -1417,7 +1417,171 @@ def render_riyadh_first_page(data: pd.DataFrame, settings: dict[str, object]) ->
                 hide_index=True,
             )
 
+    render_riyadh_market_maps(riyadh, settings)
     render_property_valuation_engine(riyadh)
+
+
+def render_riyadh_market_maps(riyadh: pd.DataFrame, settings: dict[str, object]) -> None:
+    min_deals = int(settings["min_deals"])
+    latest_market = riyadh_neighborhood_market(riyadh, min_deals)
+    if latest_market.empty:
+        return
+
+    st.subheader("خريطة السوق العقاري في الرياض")
+    st.caption("قراءة سوقية حسب الحي ونوع العقار. المصدر الحالي لا يحتوي إحداثيات جغرافية، لذلك تعرض الخريطة كثافة الأسعار والصفقات بين الأحياء.")
+
+    price_tab, deals_tab, compare_tab = st.tabs(["Heat map الأسعار", "توزيع الصفقات", "مقارنة الأحياء"])
+    with price_tab:
+        render_riyadh_price_heatmap(latest_market)
+    with deals_tab:
+        render_riyadh_deals_distribution(latest_market)
+    with compare_tab:
+        render_riyadh_neighborhood_comparison(latest_market)
+
+
+def riyadh_neighborhood_market(riyadh: pd.DataFrame, min_deals: int) -> pd.DataFrame:
+    if riyadh.empty:
+        return pd.DataFrame()
+
+    latest_period = riyadh["period_index"].max()
+    latest = riyadh[riyadh["period_index"] == latest_period].copy()
+    latest["neighborhood"] = latest.apply(neighborhood_label, axis=1)
+    market = aggregate_market(latest, ["neighborhood", "property_type"])
+    market = market.dropna(subset=["average_rent", "total_deals"]).copy()
+    market = market[market["total_deals"] >= min_deals]
+    if market.empty:
+        return market
+
+    market["demand_rank"] = market["total_deals"].rank(pct=True)
+    market["affordability_rank"] = 1 - market["average_rent"].rank(pct=True)
+    market["score"] = market["demand_rank"] * 60 + market["affordability_rank"] * 40
+    return market.sort_values("score", ascending=False)
+
+
+def neighborhood_label(row: pd.Series) -> str:
+    district = str(row.get("district_ar", "")).strip()
+    if district:
+        return district
+    location = str(row.get("location_ar", "")).strip()
+    return location.replace("الرياض -", "").strip() or "غير محدد"
+
+
+def render_riyadh_price_heatmap(market: pd.DataFrame) -> None:
+    top_neighborhoods = (
+        market.groupby("neighborhood")["total_deals"]
+        .sum()
+        .sort_values(ascending=False)
+        .head(18)
+        .index
+    )
+    top_types = (
+        market.groupby("property_type")["total_deals"]
+        .sum()
+        .sort_values(ascending=False)
+        .head(8)
+        .index
+    )
+    heat = market[
+        market["neighborhood"].isin(top_neighborhoods)
+        & market["property_type"].isin(top_types)
+    ].copy()
+    pivot = heat.pivot_table(
+        index="neighborhood",
+        columns="property_type",
+        values="average_rent",
+        aggfunc="mean",
+    )
+    if pivot.empty:
+        st.info("لا توجد بيانات كافية لرسم Heat map الأسعار.")
+        return
+
+    fig = px.imshow(
+        pivot,
+        aspect="auto",
+        color_continuous_scale="Teal",
+        labels={"x": "نوع العقار", "y": "الحي", "color": "متوسط الإيجار"},
+        title="Heat map متوسط الإيجار حسب الحي ونوع العقار",
+    )
+    apply_chart_spacing(
+        fig,
+        height=620,
+        margin={"l": 190, "r": 130, "t": 92, "b": 126},
+        colorbar_title="متوسط الإيجار",
+    )
+    fig.update_xaxes(title_text="", tickangle=-30, tickfont={"size": 10})
+    fig.update_yaxes(title_text="", tickfont={"size": 10})
+    render_chart(fig)
+
+
+def render_riyadh_deals_distribution(market: pd.DataFrame) -> None:
+    deals = market.sort_values("total_deals", ascending=False).head(35).copy()
+    if deals.empty:
+        st.info("لا توجد بيانات كافية لرسم توزيع الصفقات.")
+        return
+
+    fig = px.treemap(
+        deals,
+        path=["property_type", "neighborhood"],
+        values="total_deals",
+        color="average_rent",
+        color_continuous_scale="Teal",
+        labels={
+            "property_type": "نوع العقار",
+            "neighborhood": "الحي",
+            "total_deals": "العقود",
+            "average_rent": "متوسط الإيجار",
+        },
+        title="توزيع الصفقات حسب نوع العقار والحي",
+    )
+    apply_chart_spacing(
+        fig,
+        height=560,
+        margin={"l": 24, "r": 118, "t": 92, "b": 30},
+        colorbar_title="متوسط الإيجار",
+    )
+    fig.update_traces(textinfo="label+value", textfont_size=13)
+    render_chart(fig)
+
+
+def render_riyadh_neighborhood_comparison(market: pd.DataFrame) -> None:
+    comparison = aggregate_market(market, ["neighborhood"])
+    extras = (
+        market.groupby("neighborhood", as_index=False)
+        .agg(property_types=("property_type", "nunique"), score=("score", "max"))
+    )
+    comparison = comparison.merge(extras, on="neighborhood", how="left")
+    comparison = comparison.sort_values("score", ascending=False).head(24)
+    if comparison.empty:
+        st.info("لا توجد بيانات كافية لمقارنة الأحياء.")
+        return
+
+    fig = px.scatter(
+        comparison,
+        x="average_rent",
+        y="total_deals",
+        size="property_types",
+        color="score",
+        text="neighborhood",
+        color_continuous_scale="Teal",
+        labels={
+            "average_rent": "متوسط الإيجار",
+            "total_deals": "العقود",
+            "property_types": "تنوع الأنواع",
+            "score": "درجة الفرصة",
+            "neighborhood": "الحي",
+        },
+        title="مقارنة الأحياء: السعر مقابل الطلب",
+    )
+    apply_chart_spacing(
+        fig,
+        height=560,
+        margin={"l": 112, "r": 132, "t": 92, "b": 106},
+        colorbar_title="درجة الفرصة",
+    )
+    fig.update_traces(textposition="top center", textfont={"size": 10})
+    fig.update_xaxes(title_text="متوسط الإيجار (ر.س)", title_standoff=34, tickformat=",.0f")
+    fig.update_yaxes(title_text="العقود", title_standoff=42, tickformat=",.0f")
+    render_chart(fig)
 
 
 def render_property_valuation_engine(riyadh: pd.DataFrame) -> None:
