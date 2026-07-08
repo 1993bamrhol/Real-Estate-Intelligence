@@ -26,6 +26,7 @@ from real_estate_intel.analytics import (
     weighted_average,
 )
 from real_estate_intel.catalog import REGA_OPEN_DATA_PAGE
+from real_estate_intel.data_engine import load_market_data, warehouse_status
 from real_estate_intel.data_prep import load_rental_data, location_label
 
 
@@ -390,17 +391,23 @@ st.markdown(
 
 @st.cache_data(show_spinner=False)
 def get_data(data_version: tuple[tuple[str, int, int], ...]) -> pd.DataFrame:
-    return ensure_app_columns(load_rental_data())
+    source = ensure_app_columns(load_rental_data())
+    return ensure_app_columns(load_market_data(source))
 
 
 def raw_data_version() -> tuple[tuple[str, int, int], ...]:
     raw_dir = ROOT / "data" / "raw"
+    snapshot = ROOT / "data" / "processed" / "rental_market.csv.gz"
+    versions = []
+    if snapshot.exists():
+        versions.append((str(snapshot.relative_to(ROOT)), snapshot.stat().st_mtime_ns, snapshot.stat().st_size))
     if not raw_dir.exists():
-        return ()
-    return tuple(
+        return tuple(versions)
+    versions.extend(
         (path.name, path.stat().st_mtime_ns, path.stat().st_size)
         for path in sorted(raw_dir.glob("*.csv"))
     )
+    return tuple(versions)
 
 
 def ensure_app_columns(data: pd.DataFrame) -> pd.DataFrame:
@@ -1248,6 +1255,22 @@ def render_assistant_table(table: pd.DataFrame, limit: int = 8) -> None:
     )
 
 
+def render_data_engine_status() -> None:
+    status = warehouse_status()
+    with st.container(border=True):
+        st.subheader("Data Engine V1")
+        if status.get("ready"):
+            cols = st.columns(4)
+            cols[0].metric("حالة القاعدة", "جاهزة")
+            cols[1].metric("السجلات", f"{safe_float(status.get('rows', 0)):,.0f}")
+            cols[2].metric("المواقع", f"{safe_float(status.get('locations', 0)):,.0f}")
+            cols[3].metric("آخر فترة", str(status.get("latest_period", "-")))
+            st.caption(f"المسار المحلي: {status.get('path')}")
+        else:
+            st.warning("لم يتم إنشاء قاعدة البيانات المحلية بعد. سيستخدم التطبيق البيانات المعالجة كمسار احتياطي.")
+            st.caption(f"المسار المتوقع: {status.get('path')}")
+
+
 def render_market_coverage(data: pd.DataFrame, filtered: pd.DataFrame) -> None:
     available, missing = major_market_coverage(data)
     latest_text = period_label(data)
@@ -1602,15 +1625,33 @@ def main() -> None:
         return
 
     snapshot = build_market_snapshot(filtered, settings)
-    render_riyadh_first_page(data, settings)
-    render_ai_briefing(filtered, settings, snapshot)
-    render_decision_assistant(filtered, settings, snapshot)
-    render_market_coverage(data, filtered)
-    render_data_quality(filtered)
-    render_kpis(filtered, settings, snapshot)
-    render_charts(filtered, settings, snapshot)
-    render_opportunities(filtered, settings, snapshot)
-    render_data_table(filtered)
+    decision_tab, analyst_tab, market_tab, data_tab = st.tabs(
+        ["قرار المستثمر", "المحلل العقاري", "السوق والخرائط", "البيانات والجودة"]
+    )
+
+    with decision_tab:
+        render_riyadh_first_page(data, settings)
+
+    with analyst_tab:
+        render_ai_briefing(filtered, settings, snapshot)
+        render_decision_assistant(filtered, settings, snapshot)
+
+    with market_tab:
+        render_kpis(filtered, settings, snapshot)
+        render_charts(filtered, settings, snapshot)
+        with st.expander("قائمة الفرص المحسوبة", expanded=False):
+            render_opportunities(filtered, settings, snapshot)
+        riyadh = riyadh_focus_data(data)
+        if not riyadh.empty:
+            with st.expander("خرائط الرياض الحرارية وتوزيع الصفقات", expanded=False):
+                render_riyadh_market_maps(riyadh, settings)
+
+    with data_tab:
+        render_data_engine_status()
+        render_market_coverage(data, filtered)
+        render_data_quality(filtered)
+        with st.expander("البيانات الموحدة", expanded=False):
+            render_data_table(filtered, nested=True)
 
 
 def render_empty_state() -> None:
@@ -1680,18 +1721,22 @@ def render_filters(data: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, object]]
 
 
 def render_riyadh_first_page(data: pd.DataFrame, settings: dict[str, object]) -> None:
-    riyadh = data[data["city_ar"].map(normalize_search_text).eq("الرياض")].copy()
+    riyadh = riyadh_focus_data(data)
     if riyadh.empty:
         return
 
     st.subheader("أين توجد الفرص العقارية في الرياض؟")
-    st.caption("نقطة البداية الآن هي مدينة الرياض. يمكن توسيع الفلاتر لاحقًا، لكن القراءة الأولى تركّز على الأحياء والشرائح الأكثر جاذبية داخل الرياض.")
+    st.caption("هذه الصفحة مختصرة للقرار: أفضل الفرص، سبب الترشيح، مقارنة الأحياء، ومحرك تقييم سريع. الخرائط والجداول التفصيلية موجودة في تبويبات منفصلة.")
 
     decision_scores = build_riyadh_property_scores(riyadh, int(settings["min_deals"]))
     render_riyadh_decision_platform(riyadh, decision_scores, settings)
 
-    render_riyadh_market_maps(riyadh, settings)
+    st.divider()
     render_property_valuation_engine(riyadh)
+
+
+def riyadh_focus_data(data: pd.DataFrame) -> pd.DataFrame:
+    return data[data["city_ar"].map(normalize_search_text).eq(normalize_search_text("الرياض"))].copy()
 
 
 def build_riyadh_property_scores(riyadh: pd.DataFrame, min_deals: int) -> pd.DataFrame:
@@ -3017,8 +3062,9 @@ def render_opportunities(
     )
 
 
-def render_data_table(data: pd.DataFrame) -> None:
-    with st.expander("البيانات الموحدة"):
+def render_data_table(data: pd.DataFrame, nested: bool = False) -> None:
+    context = st.container() if nested else st.expander("البيانات الموحدة")
+    with context:
         columns = [
             "year",
             "quarter",

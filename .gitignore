@@ -10,3 +10,8 @@ data/catalog/*.json
 # Keep the compact deployable snapshot in git.
 !data/processed/
 !data/processed/rental_market.csv.gz
+
+# Local analytical warehouse is rebuilt from the snapshot/raw data.
+data/warehouse/*.sqlite
+data/warehouse/*.sqlite-*
+!data/warehouse/.gitkeep
