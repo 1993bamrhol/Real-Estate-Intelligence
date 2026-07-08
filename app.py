@@ -300,11 +300,84 @@ st.markdown(
         font-weight: 800;
         margin-top: .18rem;
     }
+    .decision-grid,
+    .alert-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: .75rem;
+        margin: .75rem 0 1rem;
+    }
+    .decision-card,
+    .alert-card,
+    .report-box {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: .95rem 1rem;
+        box-shadow: 0 12px 28px rgba(23, 33, 31, 0.06);
+    }
+    .decision-card {
+        border-right: 4px solid var(--teal);
+        min-height: 188px;
+    }
+    .alert-card {
+        border-right: 4px solid var(--amber);
+        min-height: 132px;
+    }
+    .decision-card h3,
+    .alert-card h3 {
+        margin: 0 0 .45rem;
+        font-size: 1.02rem;
+        letter-spacing: 0;
+    }
+    .decision-card p,
+    .alert-card p,
+    .report-box p {
+        color: var(--muted);
+        line-height: 1.65;
+        margin: .3rem 0;
+        font-size: .9rem;
+    }
+    .score-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 72px;
+        border-radius: 999px;
+        background: var(--teal-soft);
+        color: var(--teal);
+        font-weight: 800;
+        padding: .28rem .65rem;
+        margin-bottom: .55rem;
+        direction: ltr;
+    }
+    .decision-meta {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: .45rem;
+        margin-top: .75rem;
+        border-top: 1px solid var(--line);
+        padding-top: .65rem;
+    }
+    .decision-meta span {
+        color: var(--muted);
+        font-size: .78rem;
+    }
+    .decision-meta b {
+        display: block;
+        color: var(--ink);
+        font-size: .92rem;
+        direction: ltr;
+        text-align: right;
+        margin-top: .12rem;
+    }
     @media (max-width: 900px) {
         .ai-briefing,
         .insight-row,
         .assistant-facts,
-        .coverage-grid {
+        .coverage-grid,
+        .decision-grid,
+        .alert-grid {
             grid-template-columns: 1fr;
         }
         .status-chip { white-space: normal; }
@@ -1378,48 +1451,494 @@ def render_riyadh_first_page(data: pd.DataFrame, settings: dict[str, object]) ->
     st.subheader("أين توجد الفرص العقارية في الرياض؟")
     st.caption("نقطة البداية الآن هي مدينة الرياض. يمكن توسيع الفلاتر لاحقًا، لكن القراءة الأولى تركّز على الأحياء والشرائح الأكثر جاذبية داخل الرياض.")
 
-    scores = opportunity_scores(riyadh, min_deals=int(settings["min_deals"])).head(5).copy()
-    if scores.empty:
-        st.info("لا توجد فرص كافية الثقة داخل الرياض حسب حد العقود الحالي.")
-    else:
-        cols = st.columns(min(len(scores), 3))
-        for index, (_, row) in enumerate(scores.head(3).iterrows()):
-            location = str(row.get("location_ar", "-"))
-            property_type = str(row.get("property_type", "-"))
-            score = safe_float(row.get("score", 0))
-            rent = safe_float(row.get("average_rent", 0))
-            deals = safe_float(row.get("total_deals", 0))
-            with cols[index % len(cols)]:
-                st.metric(f"{location} | {property_type}", f"{score:,.1f}", f"{format_sar(rent)} / {deals:,.0f} عقد")
-
-        top_view = scores[
-            ["location_ar", "property_type", "average_rent", "total_deals", "growth_pct", "score"]
-        ].rename(
-            columns={
-                "location_ar": "الحي/الموقع",
-                "property_type": "نوع العقار",
-                "average_rent": "متوسط الإيجار",
-                "total_deals": "العقود",
-                "growth_pct": "النمو %",
-                "score": "درجة الفرصة",
-            }
-        )
-        with st.expander("عرض أفضل فرص الرياض", expanded=False):
-            st.dataframe(
-                top_view.style.format(
-                    {
-                        "متوسط الإيجار": "{:,.0f}",
-                        "العقود": "{:,.0f}",
-                        "النمو %": "{:,.1f}",
-                        "درجة الفرصة": "{:,.1f}",
-                    }
-                ),
-                width="stretch",
-                hide_index=True,
-            )
+    decision_scores = build_riyadh_property_scores(riyadh, int(settings["min_deals"]))
+    render_riyadh_decision_platform(riyadh, decision_scores, settings)
 
     render_riyadh_market_maps(riyadh, settings)
     render_property_valuation_engine(riyadh)
+
+
+def build_riyadh_property_scores(riyadh: pd.DataFrame, min_deals: int) -> pd.DataFrame:
+    if riyadh.empty:
+        return pd.DataFrame()
+
+    work = riyadh.copy()
+    work["neighborhood"] = work.apply(neighborhood_label, axis=1)
+    market = aggregate_market(work, ["period_index", "period", "neighborhood", "property_type"])
+    if market.empty:
+        return market
+
+    market = market.sort_values(["neighborhood", "property_type", "period_index"]).copy()
+    grouped = market.groupby(["neighborhood", "property_type"], dropna=False)
+    market["previous_period"] = grouped["period"].shift(1)
+    market["previous_average_rent"] = grouped["average_rent"].shift(1)
+    market["previous_total_deals"] = grouped["total_deals"].shift(1)
+    market["growth_pct"] = pct_series(market["average_rent"], market["previous_average_rent"])
+    market["deals_growth_pct"] = pct_series(market["total_deals"], market["previous_total_deals"])
+
+    latest_period = market["period_index"].max()
+    latest = market[market["period_index"] == latest_period].copy()
+    latest = latest.dropna(subset=["average_rent", "total_deals"])
+    latest = latest[latest["total_deals"] >= min_deals].copy()
+    if latest.empty:
+        return latest
+
+    city_averages = []
+    for property_type, group in latest.groupby("property_type", dropna=False):
+        city_averages.append(
+            {
+                "property_type": property_type,
+                "city_average_rent": weighted_average(group, "average_rent", "total_deals"),
+            }
+        )
+    latest = latest.merge(pd.DataFrame(city_averages), on="property_type", how="left")
+    latest["price_gap_pct"] = latest.apply(
+        lambda row: pct_delta(row["average_rent"], row["city_average_rent"]),
+        axis=1,
+    )
+
+    latest["growth_pct"] = pd.to_numeric(latest["growth_pct"], errors="coerce")
+    latest["deals_growth_pct"] = pd.to_numeric(latest["deals_growth_pct"], errors="coerce")
+    latest["average_rent"] = pd.to_numeric(latest["average_rent"], errors="coerce")
+    latest["total_deals"] = pd.to_numeric(latest["total_deals"], errors="coerce")
+    latest["demand_rank"] = latest["total_deals"].rank(pct=True)
+    latest["growth_rank"] = latest["growth_pct"].fillna(0).clip(lower=-50, upper=50).rank(pct=True)
+    latest["affordability_rank"] = 1 - latest["average_rent"].rank(pct=True)
+    volatility = latest["growth_pct"].fillna(0).abs().clip(lower=0, upper=80) / 80
+    latest["risk_score"] = (latest["demand_rank"] * 65 + (1 - volatility) * 35).clip(lower=0, upper=100)
+    latest["liquidity_score"] = latest["demand_rank"] * 100
+    latest["property_score"] = (
+        latest["growth_rank"] * 35
+        + latest["demand_rank"] * 30
+        + latest["affordability_rank"] * 20
+        + (latest["risk_score"] / 100) * 15
+    ).clip(lower=0, upper=100)
+    latest["score"] = latest["property_score"]
+    return latest.sort_values("property_score", ascending=False)
+
+
+def render_riyadh_decision_platform(
+    riyadh: pd.DataFrame,
+    scores: pd.DataFrame,
+    settings: dict[str, object],
+) -> None:
+    st.subheader("Decision Intelligence Platform")
+    st.caption("طبقة قرار فوق بيانات الرياض: فرص قابلة للتنفيذ، تنبيهات سوق، مقارنة أحياء، وتقرير عقاري ذكي للمستثمر.")
+
+    if scores.empty:
+        st.info("لا توجد فرص كافية الثقة داخل الرياض حسب حد العقود الحالي. خفف حد العقود أو انتظر تحديث بيانات أوسع.")
+        return
+
+    render_market_alerts(scores)
+
+    opportunity_tab, comparison_tab, report_tab = st.tabs(
+        ["Investment Opportunities", "مقارنة الأحياء", "AI Report Generator"]
+    )
+    with opportunity_tab:
+        render_investment_opportunities(scores)
+    with comparison_tab:
+        render_neighborhood_comparison_engine(scores)
+    with report_tab:
+        render_ai_report_generator(scores, riyadh, settings)
+
+
+def render_investment_opportunities(scores: pd.DataFrame) -> None:
+    st.markdown("### أفضل فرص الفترة الحالية")
+    st.caption("Property Score يجمع النمو، السيولة، جاذبية السعر، واستقرار الإشارة. القراءة هنا أولية وليست تقييمًا رسميًا.")
+
+    top = scores.head(10).copy()
+    cards = top.head(3)
+    st.markdown(
+        '<section class="decision-grid">'
+        + "".join(opportunity_card_html(row, index + 1) for index, (_, row) in enumerate(cards.iterrows()))
+        + "</section>",
+        unsafe_allow_html=True,
+    )
+
+    view = top.assign(
+        **{
+            "Property Score": top["property_score"].map(lambda value: f"{safe_float(value):,.1f}/100"),
+            "فارق عن متوسط الرياض": top["price_gap_pct"].map(format_pct_text),
+            "النمو": top["growth_pct"].map(format_pct_text),
+            "السيولة": top["liquidity_score"].map(lambda value: f"{safe_float(value):,.0f}/100"),
+            "المخاطر": top["risk_score"].map(risk_label),
+            "متوسط الإيجار": top["average_rent"].map(format_sar),
+            "العقود": top["total_deals"].map(lambda value: f"{safe_float(value):,.0f}"),
+        }
+    )
+    st.dataframe(
+        view[
+            [
+                "neighborhood",
+                "property_type",
+                "Property Score",
+                "متوسط الإيجار",
+                "فارق عن متوسط الرياض",
+                "النمو",
+                "العقود",
+                "السيولة",
+                "المخاطر",
+            ]
+        ].rename(columns={"neighborhood": "الحي", "property_type": "نوع العقار"}),
+        width="stretch",
+        hide_index=True,
+    )
+
+
+def opportunity_card_html(row: pd.Series, rank: int) -> str:
+    neighborhood = escape(str(row.get("neighborhood", "-")))
+    property_type = escape(str(row.get("property_type", "-")))
+    score = safe_float(row.get("property_score", 0))
+    rent = format_sar(safe_float(row.get("average_rent", 0)))
+    deals = safe_float(row.get("total_deals", 0))
+    growth = format_pct_text(row.get("growth_pct"))
+    gap = format_pct_text(row.get("price_gap_pct"))
+    reason = escape(investment_reason(row))
+    recommendation = escape(score_recommendation(score))
+    return f"""
+        <article class="decision-card">
+            <div class="score-badge">{score:,.1f}/100</div>
+            <h3>{rank}- {neighborhood} | {property_type}</h3>
+            <p>{reason}</p>
+            <p><b>{recommendation}</b></p>
+            <div class="decision-meta">
+                <span>متوسط الإيجار<b>{escape(rent)}</b></span>
+                <span>العقود<b>{deals:,.0f}</b></span>
+                <span>النمو<b>{escape(growth)}</b></span>
+                <span>الفارق<b>{escape(gap)}</b></span>
+            </div>
+        </article>
+    """
+
+
+def investment_reason(row: pd.Series) -> str:
+    gap = row.get("price_gap_pct")
+    growth = row.get("growth_pct")
+    demand_rank = safe_float(row.get("demand_rank", 0))
+
+    reasons = []
+    if gap is not None and not pd.isna(gap):
+        if float(gap) <= -8:
+            reasons.append(f"السعر/الإيجار أقل من متوسط الرياض بنحو {abs(float(gap)):.1f}%")
+        elif float(gap) >= 8:
+            reasons.append(f"السعر/الإيجار أعلى من متوسط الرياض بنحو {float(gap):.1f}%")
+        else:
+            reasons.append("السعر قريب من متوسط الرياض لنفس النوع")
+    if growth is not None and not pd.isna(growth):
+        reasons.append(f"النمو {format_pct_text(float(growth))}")
+    if demand_rank >= 0.75:
+        reasons.append("السيولة مرتفعة")
+    elif demand_rank >= 0.45:
+        reasons.append("السيولة متوسطة")
+    else:
+        reasons.append("السيولة تحتاج متابعة")
+    return "، ".join(reasons) + "."
+
+
+def score_recommendation(score: float) -> str:
+    if score >= 78:
+        return "قرار أولي: دراسة جادة"
+    if score >= 62:
+        return "قرار أولي: مراقبة مع تفاوض"
+    return "قرار أولي: يحتاج تحقق إضافي"
+
+
+def render_market_alerts(scores: pd.DataFrame) -> None:
+    alerts = market_alerts(scores)
+    if not alerts:
+        return
+    st.markdown("### تنبيهات سوق تعطي سببًا للعودة")
+    st.markdown(
+        '<section class="alert-grid">'
+        + "".join(
+            f"""
+            <article class="alert-card">
+                <h3>{escape(alert["title"])}</h3>
+                <p>{escape(alert["body"])}</p>
+            </article>
+            """
+            for alert in alerts
+        )
+        + "</section>",
+        unsafe_allow_html=True,
+    )
+
+
+def market_alerts(scores: pd.DataFrame) -> list[dict[str, str]]:
+    if scores.empty:
+        return []
+
+    alerts: list[dict[str, str]] = []
+    top = scores.iloc[0]
+    alerts.append(
+        {
+            "title": "فرصة جديدة في أعلى القائمة",
+            "body": (
+                f"{top['neighborhood']} | {top['property_type']} وصلت إلى "
+                f"{safe_float(top.get('property_score', 0)):,.1f}/100 مع {safe_float(top.get('total_deals', 0)):,.0f} عقد."
+            ),
+        }
+    )
+
+    undervalued = scores[
+        (scores["price_gap_pct"].notna())
+        & (scores["price_gap_pct"] <= -8)
+        & (scores["demand_rank"] >= 0.55)
+    ].sort_values("property_score", ascending=False)
+    if not undervalued.empty:
+        row = undervalued.iloc[0]
+        alerts.append(
+            {
+                "title": "سعر أقل من متوسط السوق",
+                "body": (
+                    f"{row['neighborhood']} | {row['property_type']} أقل من متوسط الرياض لنفس النوع "
+                    f"بنحو {abs(safe_float(row.get('price_gap_pct', 0))):.1f}% مع طلب قابل للقياس."
+                ),
+            }
+        )
+
+    moving = scores[
+        (scores["growth_pct"].notna())
+        & (scores["growth_pct"] >= 8)
+        & (scores["total_deals"] >= scores["total_deals"].median())
+    ].sort_values("growth_pct", ascending=False)
+    if not moving.empty:
+        row = moving.iloc[0]
+        alerts.append(
+            {
+                "title": "حي بدأ يتحرك",
+                "body": (
+                    f"{row['neighborhood']} | {row['property_type']} سجل نموًا "
+                    f"{format_pct_text(row.get('growth_pct'))} مع سيولة أعلى من متوسط القائمة."
+                ),
+            }
+        )
+
+    liquid = scores[
+        (scores["deals_growth_pct"].notna())
+        & (scores["deals_growth_pct"] >= 15)
+    ].sort_values("deals_growth_pct", ascending=False)
+    if not liquid.empty:
+        row = liquid.iloc[0]
+        alerts.append(
+            {
+                "title": "نشاط صفقات متسارع",
+                "body": (
+                    f"{row['neighborhood']} | {row['property_type']} ارتفع نشاط العقود "
+                    f"{format_pct_text(row.get('deals_growth_pct'))} مقارنة بالفترة السابقة."
+                ),
+            }
+        )
+
+    return alerts[:4]
+
+
+def render_neighborhood_comparison_engine(scores: pd.DataFrame) -> None:
+    st.markdown("### محرك مقارنة الأحياء")
+    st.caption("اختر حيّين ونوع العقار، ثم قارن السعر، النمو، السيولة، عدد العقود، والمخاطر.")
+
+    property_types = sorted(scores["property_type"].dropna().astype(str).unique())
+    preferred_type = "شقة" if "شقة" in property_types else property_types[0]
+    selected_type = st.selectbox(
+        "نوع العقار للمقارنة",
+        property_types,
+        index=property_types.index(preferred_type),
+        key="comparison_property_type",
+    )
+    scope = scores[scores["property_type"].eq(selected_type)].copy()
+    neighborhoods = sorted(scope["neighborhood"].dropna().astype(str).unique())
+    if len(neighborhoods) < 2:
+        st.info("لا توجد أحياء كافية للمقارنة لهذا النوع ضمن حد العقود الحالي.")
+        return
+
+    default_a = neighborhoods.index("النرجس") if "النرجس" in neighborhoods else 0
+    default_b = neighborhoods.index("العارض") if "العارض" in neighborhoods else min(1, len(neighborhoods) - 1)
+    if default_a == default_b:
+        default_b = 1 if default_a == 0 else 0
+
+    left, right = st.columns(2)
+    with left:
+        first = st.selectbox("الحي الأول", neighborhoods, index=default_a, key="comparison_first")
+    with right:
+        second = st.selectbox("الحي الثاني", neighborhoods, index=default_b, key="comparison_second")
+
+    row_a = score_row_for_neighborhood(scope, first)
+    row_b = score_row_for_neighborhood(scope, second)
+    if row_a is None or row_b is None:
+        st.warning("لا توجد بيانات كافية لأحد الحيين داخل نوع العقار المختار.")
+        return
+
+    st.dataframe(comparison_metric_table(row_a, row_b), width="stretch", hide_index=True)
+    verdict_type, verdict = comparison_verdict(row_a, row_b)
+    if verdict_type == "success":
+        st.success(verdict)
+    elif verdict_type == "warning":
+        st.warning(verdict)
+    else:
+        st.info(verdict)
+
+
+def score_row_for_neighborhood(scope: pd.DataFrame, neighborhood: str) -> pd.Series | None:
+    normalized = normalize_search_text(neighborhood)
+    match = scope[scope["neighborhood"].map(normalize_search_text).eq(normalized)].copy()
+    if match.empty:
+        return None
+    return match.sort_values("property_score", ascending=False).iloc[0]
+
+
+def comparison_metric_table(row_a: pd.Series, row_b: pd.Series) -> pd.DataFrame:
+    first = str(row_a["neighborhood"])
+    second = str(row_b["neighborhood"])
+    return pd.DataFrame(
+        [
+            {"المؤشر": "Property Score", first: f"{safe_float(row_a['property_score']):,.1f}/100", second: f"{safe_float(row_b['property_score']):,.1f}/100"},
+            {"المؤشر": "متوسط الإيجار", first: format_sar(row_a["average_rent"]), second: format_sar(row_b["average_rent"])},
+            {"المؤشر": "الفارق عن متوسط الرياض", first: format_pct_text(row_a.get("price_gap_pct")), second: format_pct_text(row_b.get("price_gap_pct"))},
+            {"المؤشر": "النمو", first: format_pct_text(row_a.get("growth_pct")), second: format_pct_text(row_b.get("growth_pct"))},
+            {"المؤشر": "السيولة", first: f"{safe_float(row_a.get('liquidity_score', 0)):,.0f}/100", second: f"{safe_float(row_b.get('liquidity_score', 0)):,.0f}/100"},
+            {"المؤشر": "عدد العقود", first: f"{safe_float(row_a['total_deals']):,.0f}", second: f"{safe_float(row_b['total_deals']):,.0f}"},
+            {"المؤشر": "المخاطر", first: risk_label(row_a.get("risk_score")), second: risk_label(row_b.get("risk_score"))},
+        ]
+    )
+
+
+def comparison_verdict(row_a: pd.Series, row_b: pd.Series) -> tuple[str, str]:
+    first_score = safe_float(row_a.get("property_score", 0))
+    second_score = safe_float(row_b.get("property_score", 0))
+    diff = first_score - second_score
+    if abs(diff) < 3:
+        return (
+            "info",
+            "النتيجة متقاربة. القرار النهائي يعتمد على سعر الصفقة الفعلي، جودة العقار، والشارع داخل الحي.",
+        )
+
+    winner = row_a if diff > 0 else row_b
+    loser = row_b if diff > 0 else row_a
+    winner_name = str(winner["neighborhood"])
+    loser_name = str(loser["neighborhood"])
+    winner_growth = format_pct_text(winner.get("growth_pct"))
+    winner_liquidity = safe_float(winner.get("liquidity_score", 0))
+    message = (
+        f"الأفضل للاستثمار طويل المدى حاليًا: {winner_name}. "
+        f"يتفوق على {loser_name} بدرجة {abs(diff):,.1f} نقطة، "
+        f"مع نمو {winner_growth} وسيولة {winner_liquidity:,.0f}/100. "
+        "استخدم هذه النتيجة كبداية للتفاوض وليس كقرار شراء نهائي."
+    )
+    return ("success" if abs(diff) >= 8 else "warning", message)
+
+
+def render_ai_report_generator(
+    scores: pd.DataFrame,
+    riyadh: pd.DataFrame,
+    settings: dict[str, object],
+) -> None:
+    st.markdown("### AI Report Generator")
+    st.caption("ينشئ تقريرًا عقاريًا مختصرًا من المؤشرات الحالية: الفرص، الحركة، السيولة، والمخاطر.")
+
+    focus = st.selectbox(
+        "نوع التقرير",
+        ["تقرير فرص الرياض", "تقرير مخاطر السوق", "تقرير مقارنة أفضل الأحياء"],
+        key="ai_report_focus",
+    )
+    report = build_investor_report(scores, riyadh, focus, int(settings["min_deals"]))
+    report_signature = f"{focus}:{period_label(riyadh)}:{len(scores)}"
+    if st.session_state.get("investor_report_signature") != report_signature:
+        st.session_state["investor_report_text"] = report
+        st.session_state["investor_report_signature"] = report_signature
+    if st.button("إنشاء تقرير عقاري", type="primary", key="generate_investor_report"):
+        st.session_state["investor_report_text"] = report
+        st.session_state["investor_report_signature"] = report_signature
+    if "investor_report_text" not in st.session_state:
+        st.session_state["investor_report_text"] = report
+
+    report_text = str(st.session_state["investor_report_text"])
+    st.text_area("تقرير المستثمر", value=report_text, height=360)
+    period = period_label(riyadh).replace(" ", "-") or "latest"
+    st.download_button(
+        "تحميل التقرير",
+        data=report_text,
+        file_name=f"riyadh-investor-report-{period}.md",
+        mime="text/markdown",
+        key="download_investor_report",
+    )
+
+
+def build_investor_report(
+    scores: pd.DataFrame,
+    riyadh: pd.DataFrame,
+    focus: str,
+    min_deals: int,
+) -> str:
+    period = period_label(riyadh) or "آخر فترة متاحة"
+    top = scores.head(5)
+    best = top.iloc[0]
+    alerts = market_alerts(scores)
+    average_score = safe_float(scores["property_score"].mean(), 0)
+    high_confidence = scores[scores["total_deals"] >= max(min_deals * 3, min_deals)]
+
+    lines = [
+        "# تقرير المحلل العقاري - الرياض",
+        f"الفترة: {period}",
+        f"نوع التقرير: {focus}",
+        "",
+        "## الملخص التنفيذي",
+        (
+            f"أفضل فرصة محسوبة حاليًا هي {best['neighborhood']} | {best['property_type']} "
+            f"بدرجة {safe_float(best.get('property_score', 0)):,.1f}/100. "
+            f"متوسط درجة الفرص داخل القائمة {average_score:,.1f}/100، "
+            f"وعدد الشرائح الأعلى ثقة من ناحية العقود {len(high_confidence):,.0f}."
+        ),
+        "",
+        "## أفضل الفرص",
+    ]
+
+    for index, (_, row) in enumerate(top.iterrows(), start=1):
+        lines.append(
+            (
+                f"{index}. {row['neighborhood']} | {row['property_type']} - "
+                f"Score {safe_float(row.get('property_score', 0)):,.1f}/100، "
+                f"متوسط الإيجار {format_sar(row['average_rent'])}، "
+                f"النمو {format_pct_text(row.get('growth_pct'))}، "
+                f"العقود {safe_float(row['total_deals']):,.0f}، "
+                f"المخاطر {risk_label(row.get('risk_score'))}."
+            )
+        )
+
+    lines.extend(["", "## إشارات تستحق المتابعة"])
+    for alert in alerts:
+        lines.append(f"- {alert['title']}: {alert['body']}")
+
+    lines.extend(
+        [
+            "",
+            "## قرار أولي",
+            investor_decision_text(best),
+            "",
+            "## ملاحظة منهجية",
+            "المؤشرات تعتمد على بيانات الإيجار والعقود المتاحة حاليًا، لذلك فهي مناسبة للفرز والمقارنة والتفاوض الأولي. قرار الشراء النهائي يحتاج سعر صفقة فعلي، حالة العقار، موقعه الدقيق، والتمويل.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def investor_decision_text(row: pd.Series) -> str:
+    score = safe_float(row.get("property_score", 0))
+    if score >= 78:
+        action = "ابدأ دراسة الصفقة والتفاوض فور توفر عقار بسعر قريب أو أقل من متوسط الحي."
+    elif score >= 62:
+        action = "ضع الحي في قائمة المراقبة واطلب خصمًا واضحًا إذا كان السعر أعلى من المتوسط."
+    else:
+        action = "لا تتخذ قرارًا سريعًا؛ اطلب بيانات صفقة أدق أو قارن ببدائل أقوى."
+    return f"{action} القراءة الأقوى حاليًا: {row['neighborhood']} | {row['property_type']}."
+
+
+def risk_label(value: object) -> str:
+    score = safe_float(value, 0)
+    if score >= 75:
+        return "منخفضة"
+    if score >= 55:
+        return "متوسطة"
+    return "مرتفعة"
 
 
 def render_riyadh_market_maps(riyadh: pd.DataFrame, settings: dict[str, object]) -> None:
@@ -2318,6 +2837,13 @@ def pct_delta(current: float, previous: float) -> float | None:
     if pd.isna(current) or pd.isna(previous) or previous == 0:
         return None
     return (current - previous) / previous * 100
+
+
+def pct_series(current: pd.Series, previous: pd.Series) -> pd.Series:
+    current_values = pd.to_numeric(current, errors="coerce")
+    previous_values = pd.to_numeric(previous, errors="coerce")
+    result = (current_values - previous_values) / previous_values * 100
+    return result.mask(previous_values.le(0) | previous_values.isna())
 
 
 def format_pct(value: float | None) -> str | None:
