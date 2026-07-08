@@ -568,6 +568,8 @@ def render_decision_assistant(
     st.caption("اسأل كمحلل استثماري: مقارنة أحياء، قوة الطلب، المخاطر، السعر المناسب، أو أين توجد فرصة قابلة للدراسة.")
 
     examples = [
+        "اشرح لي وضع العزيزية بالتفصيل",
+        "حلل حي النرجس: السعر والطلب والمخاطر",
         "لدي 800 ألف ر.س، ما أفضل المناطق للاستثمار؟",
         "معي مليون ر.س، أين أبحث عن شقة في الرياض؟",
         "ما أفضل الفرص العقارية الآن؟",
@@ -603,6 +605,10 @@ def answer_decision_question(
     mode = detect_question_mode(question)
     limit = requested_result_limit(question)
     budget = extract_investment_budget(question)
+    profile_target = requested_neighborhood_profile_target(scoped, question)
+
+    if profile_target and budget is None:
+        return answer_neighborhood_profile(question, data, filters, min_deals, limit, profile_target)
 
     if budget is not None:
         return answer_budget_question(question, scoped, filters, min_deals, limit, budget)
@@ -707,6 +713,308 @@ def answer_decision_question(
             "النمو": growth_text,
         },
     }
+
+
+def answer_neighborhood_profile(
+    question: str,
+    data: pd.DataFrame,
+    filters: list[str],
+    min_deals: int,
+    limit: int,
+    target: str,
+) -> dict[str, object]:
+    rows = neighborhood_profile_rows(data, target)
+    if rows.empty:
+        return {
+            "title": f"لم أجد بيانات كافية عن {target}",
+            "summary": f"لم أجد حيًا مطابقًا لاسم {target} داخل نطاق الفلاتر الحالي.",
+            "method": "تم البحث في أسماء الأحياء والمواقع داخل قاعدة البيانات الحالية.",
+            "filters": filters,
+            "table": pd.DataFrame(),
+            "facts": {},
+            "reasons": [],
+            "warnings": ["جرّب كتابة اسم الحي كما يظهر في البيانات أو وسّع نطاق المدينة من الفلاتر."],
+            "followups": default_followups(),
+            "limit": limit,
+        }
+
+    profile = build_neighborhood_profile(data, rows, target, min_deals).head(limit).copy()
+    if profile.empty:
+        return {
+            "title": f"تحليل {target}",
+            "summary": f"وجدت بيانات عن {target}، لكنها لا تتجاوز حد العقود الحالي لقراءة موثوقة.",
+            "method": "تم بناء ملف الحي من آخر فترة متاحة ومقارنة أنواع العقار داخل الحي بالسوق المحيط.",
+            "filters": [*filters, f"الحي: {target}"],
+            "table": profile,
+            "facts": {},
+            "reasons": [],
+            "warnings": ["خفّض حد العقود من الفلاتر أو استخدم نطاقًا زمنيًا أوسع."],
+            "followups": neighborhood_followups(target),
+            "limit": limit,
+        }
+
+    best = profile.iloc[0]
+    latest_period = str(best.get("period", period_label(rows)))
+    total_deals = safe_float(profile["total_deals"].sum(), 0)
+    weighted_rent = weighted_average(profile, "average_rent", "total_deals")
+    property_types = profile["property_type"].nunique()
+    best_type = str(best.get("property_type", "-"))
+    best_score = safe_float(best.get("score", 0))
+    growth = best.get("growth_pct", pd.NA)
+    growth_text = "-" if pd.isna(growth) else format_pct_text(float(growth))
+    rent_gap = best.get("rent_gap_pct")
+    rent_gap_text = format_pct_text(rent_gap if rent_gap is not None and not pd.isna(rent_gap) else None)
+    city_text = profile_scope_text(rows)
+
+    return {
+        "title": f"ملف حي {target}",
+        "decision": neighborhood_profile_decision(best, total_deals, min_deals),
+        "summary": (
+            f"{target} داخل {city_text} يظهر في آخر فترة ({latest_period}) بمتوسط إيجار مرجح {format_sar(weighted_rent)} "
+            f"وإجمالي {total_deals:,.0f} عقد عبر {property_types:,.0f} أنواع عقار. "
+            f"أقوى شريحة حاليًا هي {best_type} بدرجة {best_score:,.1f}/100، "
+            f"مع نمو {growth_text} وفارق عن السوق المحيط {rent_gap_text}."
+        ),
+        "method": (
+            "حللت الحي من قاعدة البيانات حسب آخر فترة متاحة، ثم قارنت كل نوع عقار داخل الحي بمتوسط السوق لنفس النوع، "
+            "وقست السيولة بعدد العقود، النمو مقابل الفترة السابقة، وجاذبية السعر النسبية."
+        ),
+        "filters": [*filters, f"الحي: {target}"],
+        "table": profile,
+        "reasons": neighborhood_profile_reasons(best, profile, target),
+        "warnings": neighborhood_profile_warnings(rows, profile, min_deals),
+        "followups": neighborhood_followups(target),
+        "limit": limit,
+        "facts": {
+            "آخر فترة": latest_period,
+            "متوسط الحي": format_sar(weighted_rent),
+            "العقود": f"{total_deals:,.0f}",
+            "أقوى نوع": best_type,
+        },
+    }
+
+
+def requested_neighborhood_profile_target(data: pd.DataFrame, question: str) -> str | None:
+    if data.empty or not is_neighborhood_profile_question(question):
+        return None
+
+    normalized = normalize_search_text(question)
+    if "district_ar" in data.columns:
+        district_matches = matching_values(data["district_ar"].dropna().unique(), normalized)
+        district_matches = [value for value in district_matches if normalize_search_text(value)]
+        if district_matches:
+            return district_matches[0]
+
+    location_matches = matching_values(data["location_ar"].dropna().unique(), normalized)
+    if location_matches:
+        location = str(location_matches[0])
+        return location.split(" - ")[-1].strip() or location
+    return None
+
+
+def is_neighborhood_profile_question(question: str) -> bool:
+    normalized = normalize_search_text(question)
+    cues = [
+        "اشرح",
+        "شرح",
+        "حلل",
+        "تحليل",
+        "وضع",
+        "تفصيل",
+        "تفصيلا",
+        "بالتفصيل",
+        "ملف",
+        "تقييم",
+        "قيمني",
+        "كيف",
+        "ماذا عن",
+    ]
+    return any(cue in normalized for cue in cues)
+
+
+def neighborhood_profile_rows(data: pd.DataFrame, target: str) -> pd.DataFrame:
+    normalized = normalize_search_text(target)
+    if data.empty or not normalized:
+        return data.iloc[0:0].copy()
+
+    mask = pd.Series(False, index=data.index)
+    if "district_ar" in data.columns:
+        mask = mask | data["district_ar"].map(normalize_search_text).eq(normalized)
+    if "location_ar" in data.columns:
+        mask = mask | data["location_ar"].map(normalize_search_text).str.contains(
+            normalized,
+            na=False,
+            regex=False,
+        )
+    return data[mask].copy()
+
+
+def build_neighborhood_profile(
+    data: pd.DataFrame,
+    rows: pd.DataFrame,
+    target: str,
+    min_deals: int,
+) -> pd.DataFrame:
+    if rows.empty:
+        return pd.DataFrame()
+
+    latest_period = rows["period_index"].max()
+    latest_rows = rows[rows["period_index"] == latest_period].copy()
+    profile = aggregate_market(
+        latest_rows,
+        ["region_ar", "city_ar", "location_ar", "district_ar", "property_type", "period"],
+    )
+    profile = profile.dropna(subset=["average_rent", "total_deals"]).copy()
+    if profile.empty:
+        return profile
+
+    benchmark = neighborhood_profile_benchmark(data, latest_period)
+    profile = profile.merge(
+        benchmark,
+        on="property_type",
+        how="left",
+    )
+    profile["rent_gap_pct"] = profile.apply(
+        lambda row: pct_delta(row["average_rent"], row.get("market_average_rent")),
+        axis=1,
+    )
+
+    growth = neighborhood_profile_growth(rows)
+    profile = profile.merge(growth, on="property_type", how="left")
+    profile = add_neighborhood_profile_scores(profile, benchmark)
+    profile["profile_note"] = profile.apply(profile_row_note, axis=1)
+    profile = profile[profile["total_deals"] >= min_deals].copy()
+    if profile.empty:
+        return profile
+    return profile.sort_values(["score", "total_deals"], ascending=False)
+
+
+def neighborhood_profile_benchmark(data: pd.DataFrame, latest_period: int) -> pd.DataFrame:
+    latest = data[data["period_index"] == latest_period].copy()
+    market = aggregate_market(latest, ["location_ar", "property_type"])
+    if market.empty:
+        return pd.DataFrame(columns=["property_type", "market_average_rent", "market_median_deals"])
+
+    market["market_demand_rank"] = market.groupby("property_type")["total_deals"].rank(pct=True)
+    market["market_affordability_rank"] = 1 - market.groupby("property_type")["average_rent"].rank(pct=True)
+    rows = []
+    for property_type, group in market.groupby("property_type", dropna=False):
+        rows.append(
+            {
+                "property_type": property_type,
+                "market_average_rent": weighted_average(group, "average_rent", "total_deals"),
+                "market_median_deals": group["total_deals"].median(),
+                "market_max_deals": group["total_deals"].max(),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def neighborhood_profile_growth(rows: pd.DataFrame) -> pd.DataFrame:
+    trend = aggregate_market(rows, ["period_index", "period", "property_type"])
+    if trend.empty:
+        return pd.DataFrame(columns=["property_type", "previous_period", "previous_average_rent", "growth_pct"])
+    trend = trend.sort_values(["property_type", "period_index"]).copy()
+    grouped = trend.groupby("property_type", dropna=False)
+    trend["previous_period"] = grouped["period"].shift(1)
+    trend["previous_average_rent"] = grouped["average_rent"].shift(1)
+    trend["growth_pct"] = pct_series(trend["average_rent"], trend["previous_average_rent"])
+    latest = trend[trend["period_index"] == trend["period_index"].max()].copy()
+    return latest[["property_type", "previous_period", "previous_average_rent", "growth_pct"]]
+
+
+def add_neighborhood_profile_scores(profile: pd.DataFrame, benchmark: pd.DataFrame) -> pd.DataFrame:
+    scored = profile.copy()
+    max_deals = scored["market_max_deals"].replace(0, pd.NA)
+    scored["liquidity_score"] = (scored["total_deals"] / max_deals * 100).clip(lower=0, upper=100)
+    scored["affordability_score"] = (100 - scored["rent_gap_pct"].fillna(0)).clip(lower=0, upper=100)
+    scored["growth_score"] = ((scored["growth_pct"].fillna(0).clip(lower=-25, upper=35) + 25) / 60 * 100).clip(
+        lower=0,
+        upper=100,
+    )
+    scored["score"] = (
+        scored["liquidity_score"].fillna(0) * 0.42
+        + scored["growth_score"].fillna(50) * 0.30
+        + scored["affordability_score"].fillna(50) * 0.28
+    ).clip(lower=0, upper=100)
+    return scored
+
+
+def profile_row_note(row: pd.Series) -> str:
+    liquidity = safe_float(row.get("liquidity_score", 0))
+    growth = row.get("growth_pct", pd.NA)
+    gap = row.get("rent_gap_pct", pd.NA)
+    if liquidity >= 70 and not pd.isna(growth) and float(growth) >= 5:
+        return "طلب قوي مع نمو إيجابي"
+    if liquidity >= 70:
+        return "سيولة قوية"
+    if not pd.isna(gap) and float(gap) <= -8:
+        return "سعر أقل من السوق المحيط"
+    if not pd.isna(growth) and float(growth) < -5:
+        return "تباطؤ يحتاج متابعة"
+    return "قراءة متوسطة"
+
+
+def neighborhood_profile_decision(row: pd.Series, total_deals: float, min_deals: int) -> str:
+    score = safe_float(row.get("score", 0))
+    liquidity = safe_float(row.get("liquidity_score", 0))
+    growth = row.get("growth_pct", pd.NA)
+    if score >= 75 and liquidity >= 65:
+        return "القرار: الحي نشط وقابل للدراسة، خصوصًا في الشريحة الأعلى درجة، مع ضرورة مقارنة سعر الصفقة الفعلي."
+    if score >= 60 and total_deals >= min_deals * 3:
+        return "القرار: الحي مناسب للمراقبة الجادة والانتقاء، وليس للشراء العشوائي."
+    if not pd.isna(growth) and float(growth) < -8:
+        return "القرار: الحي يحتاج حذرًا؛ توجد إشارة تراجع في الشريحة الأقوى."
+    return "القرار: القراءة أولية وتحتاج تحققًا ميدانيًا أو بيانات بيع قبل اتخاذ قرار استثماري."
+
+
+def neighborhood_profile_reasons(row: pd.Series, profile: pd.DataFrame, target: str) -> list[str]:
+    reasons = [
+        f"أقوى شريحة في {target}: {row.get('property_type', '-')} بدرجة {safe_float(row.get('score', 0)):,.1f}/100.",
+        f"حجم العقود في هذه الشريحة {safe_float(row.get('total_deals', 0)):,.0f} عقد، وسيولتها {safe_float(row.get('liquidity_score', 0)):,.0f}/100 مقارنة بنفس النوع.",
+    ]
+    gap = row.get("rent_gap_pct", pd.NA)
+    if not pd.isna(gap):
+        reasons.append(f"متوسط الإيجار يختلف عن السوق المحيط لنفس النوع بنحو {format_pct_text(float(gap))}.")
+    growth = row.get("growth_pct", pd.NA)
+    if not pd.isna(growth):
+        reasons.append(f"النمو مقابل الفترة السابقة {format_pct_text(float(growth))}.")
+    if profile["property_type"].nunique() > 1:
+        best_types = "، ".join(profile["property_type"].astype(str).head(3))
+        reasons.append(f"الحي يحتوي أكثر من شريحة قابلة للقراءة، وأبرزها: {best_types}.")
+    return reasons[:5]
+
+
+def neighborhood_profile_warnings(rows: pd.DataFrame, profile: pd.DataFrame, min_deals: int) -> list[str]:
+    warnings: list[str] = [
+        "البيانات الحالية إيجارية؛ لا تكفي وحدها لتحديد سعر شراء عادل أو سعر متر بيع.",
+    ]
+    if rows["city_ar"].nunique() > 1:
+        cities = "، ".join(rows["city_ar"].dropna().astype(str).unique()[:4])
+        warnings.append(f"اسم الحي موجود في أكثر من مدينة داخل النطاق الحالي: {cities}. استخدم فلتر المدينة لقراءة أدق.")
+    if safe_float(profile["total_deals"].sum(), 0) < min_deals * 4:
+        warnings.append("حجم العقود محدود نسبيًا؛ ارفع الثقة بتوسيع الفترة أو مقارنة الحي بأحياء قريبة.")
+    if profile["growth_pct"].isna().all():
+        warnings.append("لا توجد مقارنة نمو كافية لكل الشرائح في آخر فترتين.")
+    return warnings[:4]
+
+
+def neighborhood_followups(target: str) -> list[str]:
+    return [
+        f"قارن {target} مع حي قريب",
+        f"ما أفضل نوع عقار داخل {target}؟",
+        f"ما مخاطر الاستثمار في {target}؟",
+    ]
+
+
+def profile_scope_text(rows: pd.DataFrame) -> str:
+    cities = rows["city_ar"].dropna().astype(str).unique()
+    regions = rows["region_ar"].dropna().astype(str).unique()
+    if len(cities) == 1:
+        return cities[0]
+    if len(regions) == 1:
+        return regions[0]
+    return f"{len(cities):,.0f} مدن"
 
 
 def answer_budget_question(
@@ -1213,14 +1521,19 @@ def render_assistant_table(table: pd.DataFrame, limit: int = 8) -> None:
         "region_ar",
         "city_ar",
         "location_ar",
+        "district_ar",
         "property_type",
+        "period",
         "average_rent",
+        "rent_gap_pct",
         "budget_yield_pct",
         "total_deals",
         "growth_pct",
+        "liquidity_score",
         "budget_fit_score",
         "score",
         "budget_note",
+        "profile_note",
     ]
     available = [column for column in columns if column in table.columns]
     if "budget_fit_score" in available and "score" in available:
@@ -1230,21 +1543,28 @@ def render_assistant_table(table: pd.DataFrame, limit: int = 8) -> None:
             "region_ar": "المنطقة",
             "city_ar": "المدينة",
             "location_ar": "الموقع",
+            "district_ar": "الحي",
             "property_type": "نوع العقار",
+            "period": "الفترة",
             "average_rent": "متوسط الإيجار",
+            "rent_gap_pct": "فارق السوق %",
             "budget_yield_pct": "عائد تقديري %",
             "total_deals": "العقود",
             "growth_pct": "النمو %",
+            "liquidity_score": "السيولة",
             "budget_fit_score": "ملاءمة الميزانية",
             "score": "الدرجة",
             "budget_note": "قراءة الميزانية",
+            "profile_note": "قراءة الشريحة",
         }
     )
     formatters = {
         "متوسط الإيجار": "{:,.0f}",
+        "فارق السوق %": "{:,.1f}",
         "عائد تقديري %": "{:,.2f}",
         "العقود": "{:,.0f}",
         "النمو %": "{:,.1f}",
+        "السيولة": "{:,.1f}",
         "ملاءمة الميزانية": "{:,.1f}",
         "الدرجة": "{:,.1f}",
     }
