@@ -28,6 +28,12 @@ from real_estate_intel.analytics import (
 from real_estate_intel.catalog import REGA_OPEN_DATA_PAGE
 from real_estate_intel.data_engine import load_market_data, warehouse_status
 from real_estate_intel.data_prep import load_rental_data, location_label
+from real_estate_intel.official_sources import (
+    metric_lineage_frame,
+    official_limitations,
+    official_source_summary,
+    official_sources_frame,
+)
 
 
 st.set_page_config(page_title="Real Estate Intelligence", layout="wide")
@@ -1874,15 +1880,87 @@ def render_data_engine_status() -> None:
     with st.container(border=True):
         st.subheader("Data Engine V1")
         if status.get("ready"):
-            cols = st.columns(4)
+            cols = st.columns(5)
             cols[0].metric("حالة القاعدة", "جاهزة")
             cols[1].metric("السجلات", f"{safe_float(status.get('rows', 0)):,.0f}")
             cols[2].metric("المواقع", f"{safe_float(status.get('locations', 0)):,.0f}")
             cols[3].metric("آخر فترة", str(status.get("latest_period", "-")))
+            cols[4].metric("المصادر الرسمية", f"{safe_float(status.get('official_sources', 0)):,.0f}")
             st.caption(f"المسار المحلي: {status.get('path')}")
         else:
             st.warning("لم يتم إنشاء قاعدة البيانات المحلية بعد. سيستخدم التطبيق البيانات المعالجة كمسار احتياطي.")
             st.caption(f"المسار المتوقع: {status.get('path')}")
+
+
+def render_official_sources_status(data: pd.DataFrame) -> None:
+    summary = official_source_summary(data)
+    sources = official_sources_frame()
+    lineage = metric_lineage_frame()
+
+    with st.container(border=True):
+        st.subheader("مصادر رسمية ومنهجية قابلة للبيع")
+        st.caption(
+            "هذه الطبقة توضح ما يمكن الاعتماد عليه الآن من مصادر رسمية، وما يحتاج دمجه قبل تحويل التقرير إلى تقييم بيع نهائي."
+        )
+        cols = st.columns(5)
+        cols[0].metric("جاهزية البيانات", f"{summary['readiness_score']}/100", str(summary["readiness_label"]))
+        cols[1].metric("مصادر نشطة", f"{summary['active_sources']:,.0f}")
+        cols[2].metric("مجموعات بيانات", f"{summary['datasets']:,.0f}")
+        cols[3].metric("الأحياء/المواقع", f"{summary['locations']:,.0f}")
+        cols[4].metric("آخر فترة", str(summary["latest_period"]))
+
+        if float(summary["readiness_score"]) >= 65:
+            st.success(
+                "المنتج جاهز حالياً لتقارير إيجارية رسمية ومقارنات فرص مبنية على عقود الإيجار. "
+                "تقييم سعر شراء نهائي يحتاج دمج صفقات البيع والحدود الجغرافية الرسمية."
+            )
+        else:
+            st.warning("البيانات الحالية تحتاج تدعيم قبل استخدام التقرير كمنتج تجاري عالي الثقة.")
+
+    with st.expander("سجل المصادر الرسمية", expanded=False):
+        view = sources.rename(
+            columns={
+                "name_ar": "المصدر",
+                "owner_ar": "الجهة",
+                "access_ar": "الإتاحة",
+                "status_ar": "الحالة",
+                "coverage_ar": "التغطية",
+                "used_for_ar": "الاستخدام في المنتج",
+                "trust_score": "درجة الثقة",
+                "url": "الرابط",
+            }
+        )
+        st.dataframe(
+            view[
+                [
+                    "المصدر",
+                    "الجهة",
+                    "الإتاحة",
+                    "الحالة",
+                    "التغطية",
+                    "الاستخدام في المنتج",
+                    "درجة الثقة",
+                    "الرابط",
+                ]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+
+    with st.expander("منهجية المؤشرات وحدود استخدامها", expanded=False):
+        indicator_view = lineage.rename(
+            columns={
+                "indicator_ar": "المؤشر",
+                "source_ar": "المصدر",
+                "confidence_ar": "الثقة",
+                "method_ar": "طريقة الحساب",
+                "decision_use_ar": "استخدامه في القرار",
+                "limitation_ar": "حدود المؤشر",
+            }
+        )
+        st.dataframe(indicator_view, width="stretch", hide_index=True)
+        for note in official_limitations():
+            st.caption(f"- {note}")
 
 
 def render_market_coverage(data: pd.DataFrame, filtered: pd.DataFrame) -> None:
@@ -2262,6 +2340,7 @@ def main() -> None:
 
     with data_tab:
         render_data_engine_status()
+        render_official_sources_status(data)
         render_market_coverage(data, filtered)
         render_data_quality(filtered)
         with st.expander("البيانات الموحدة", expanded=False):
@@ -2794,6 +2873,11 @@ def build_investor_report(
             "",
             "## قرار أولي",
             investor_decision_text(best),
+            "",
+            "## مصادر التقرير ومستوى الثقة",
+            "المصدر النشط حالياً: الهيئة العامة للعقار - بيانات الإيجار المفتوحة، مع التحقق من الكتالوج عبر منصة البيانات المفتوحة الوطنية عند التحديث.",
+            "مستوى الثقة: عال لتحليل الإيجارات والعقود، ومتوسط لمؤشر الفرص لأنه مؤشر مشتق وليس تقييماً رسمياً.",
+            "ما لا يغطيه التقرير بعد: صفقات البيع التفصيلية، سعر المتر، حدود الأحياء الجغرافية الرسمية، حالة العقار، والتمويل.",
             "",
             "## ملاحظة منهجية",
             "المؤشرات تعتمد على بيانات الإيجار والعقود المتاحة حاليًا، لذلك فهي مناسبة للفرز والمقارنة والتفاوض الأولي. قرار الشراء النهائي يحتاج سعر صفقة فعلي، حالة العقار، موقعه الدقيق، والتمويل.",

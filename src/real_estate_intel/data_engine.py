@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from real_estate_intel.analytics import aggregate_market
+from real_estate_intel.official_sources import metric_lineage_frame, official_sources_frame
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -13,6 +14,8 @@ WAREHOUSE_PATH = PROJECT_ROOT / "data" / "warehouse" / "real_estate.sqlite"
 CLEAN_TABLE = "rental_market_clean"
 SIGNALS_TABLE = "rental_market_signals"
 QUALITY_TABLE = "data_quality_summary"
+SOURCE_REGISTRY_TABLE = "official_source_registry"
+METRIC_LINEAGE_TABLE = "metric_lineage"
 
 
 def load_market_data(source: pd.DataFrame, db_path: Path = WAREHOUSE_PATH) -> pd.DataFrame:
@@ -34,11 +37,15 @@ def build_sqlite_warehouse(source: pd.DataFrame, db_path: Path = WAREHOUSE_PATH)
     clean = prepare_clean_market(source)
     signals = build_market_signals(clean)
     quality = build_quality_summary(clean)
+    source_registry = official_sources_frame()
+    metric_lineage = metric_lineage_frame()
 
     with sqlite3.connect(db_path) as connection:
         clean.to_sql(CLEAN_TABLE, connection, if_exists="replace", index=False)
         signals.to_sql(SIGNALS_TABLE, connection, if_exists="replace", index=False)
         quality.to_sql(QUALITY_TABLE, connection, if_exists="replace", index=False)
+        source_registry.to_sql(SOURCE_REGISTRY_TABLE, connection, if_exists="replace", index=False)
+        metric_lineage.to_sql(METRIC_LINEAGE_TABLE, connection, if_exists="replace", index=False)
         connection.execute(f"create index if not exists idx_clean_period_city on {CLEAN_TABLE}(period_index, city_ar)")
         connection.execute(f"create index if not exists idx_clean_location on {CLEAN_TABLE}(location_ar)")
         connection.execute(f"create index if not exists idx_signals_entity on {SIGNALS_TABLE}(location_ar, property_type)")
@@ -148,10 +155,15 @@ def warehouse_status(db_path: Path = WAREHOUSE_PATH) -> dict[str, object]:
     try:
         with sqlite3.connect(db_path) as connection:
             quality = pd.read_sql_query(f"select metric, value from {QUALITY_TABLE}", connection)
+            source_registry = pd.read_sql_query(
+                f"select source_id, active from {SOURCE_REGISTRY_TABLE}",
+                connection,
+            )
     except sqlite3.Error:
         return {"ready": False, "path": str(db_path)}
 
     values = {str(row["metric"]): row["value"] for _, row in quality.iterrows()}
+    active_sources = int(source_registry["active"].astype(bool).sum()) if not source_registry.empty else 0
     return {
         "ready": True,
         "path": str(db_path),
@@ -159,4 +171,5 @@ def warehouse_status(db_path: Path = WAREHOUSE_PATH) -> dict[str, object]:
         "latest_period": values.get("latest_period", ""),
         "locations": values.get("locations", 0),
         "sources": values.get("sources", 0),
+        "official_sources": active_sources,
     }
