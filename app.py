@@ -11,13 +11,9 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-ROOT = Path(__file__).resolve().parent
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
 from real_estate_intel.analytics import (
     aggregate_market,
+    detect_market_signals,
     opportunity_scores,
     period_coverage,
     period_label,
@@ -35,6 +31,8 @@ from real_estate_intel.official_sources import (
     official_sources_frame,
 )
 
+
+ROOT = Path(__file__).resolve().parent
 
 st.set_page_config(page_title="Real Estate Intelligence", layout="wide")
 
@@ -1583,7 +1581,7 @@ def answer_comparison_question(
 
     return {
         "title": f"مقارنة حسب {group_label}",
-        "decision": f"الخيار الأقوى في هذه المقارنة: {best_name}.",
+        "decision": comparison_decision(best, second, group_col),
         "summary": (
             f"{best_name} يتصدر المقارنة بدرجة {score:,.1f}. "
             f"متوسط الإيجار {format_sar(rent)}، العقود {deals:,.0f}، والنمو {growth_text}."
@@ -1603,6 +1601,24 @@ def answer_comparison_question(
             "العقود": f"{deals:,.0f}",
         },
     }
+
+
+def comparison_decision(best: pd.Series, second: pd.Series | None, group_col: str) -> str:
+    """Generates a clear, actionable recommendation for a comparison."""
+    best_name = str(best.get(group_col, "-"))
+    if second is None:
+        return f"الخيار الأقوى في هذه المقارنة: {best_name}. لا يوجد بديل قوي كافٍ للمقارنة ضمن النطاق الحالي."
+
+    best_score = safe_float(best.get("score", 0))
+    second_score = safe_float(second.get("score", 0))
+    diff = best_score - second_score
+
+    if diff < 5:
+        return f"النتيجة متقاربة بين {best_name} و{str(second.get(group_col, '-'))}. القرار يعتمد على تفاصيل الصفقة الميدانية."
+
+    best_growth = format_pct_text(best.get("growth_pct"))
+    best_deals = safe_float(best.get("total_deals", 0))
+    return f"التوصية: {best_name}. يتفوق بدرجة {diff:,.1f} نقطة، مع نمو {best_growth} و{best_deals:,.0f} عقد. استخدم هذه النتيجة كبداية للتحليل."
 
 
 def comparison_group(data: pd.DataFrame, question: str) -> tuple[str, str, list[str]]:
@@ -2492,6 +2508,24 @@ def build_riyadh_property_scores(riyadh: pd.DataFrame, min_deals: int) -> pd.Dat
         + (latest["risk_score"] / 100) * 15
     ).clip(lower=0, upper=100)
     latest["score"] = latest["property_score"]
+
+    # Add investor strategy scores to align with the main analytics module
+    latest["investor_score_balanced"] = (
+        latest["demand_rank"] * 40
+        + latest["growth_rank"] * 35
+        + latest["affordability_rank"] * 25
+    ).clip(0, 100)
+    latest["investor_score_yield"] = (
+        latest["demand_rank"] * 50
+        + latest["affordability_rank"] * 30
+        + latest["growth_rank"] * 20
+    ).clip(0, 100)
+    latest["investor_score_growth"] = (
+        latest["growth_rank"] * 50
+        + latest["demand_rank"] * 30
+        + latest["affordability_rank"] * 20
+    ).clip(0, 100)
+
     return latest.sort_values("property_score", ascending=False)
 
 
@@ -2500,14 +2534,30 @@ def render_riyadh_decision_platform(
     scores: pd.DataFrame,
     settings: dict[str, object],
 ) -> None:
-    st.subheader("Decision Intelligence Platform")
-    st.caption("طبقة قرار فوق بيانات الرياض: فرص قابلة للتنفيذ، تنبيهات سوق، مقارنة أحياء، وتقرير عقاري ذكي للمستثمر.")
+    st.markdown("#### منصة القرار للرياض")
 
     if scores.empty:
-        st.info("لا توجد فرص كافية الثقة داخل الرياض حسب حد العقود الحالي. خفف حد العقود أو انتظر تحديث بيانات أوسع.")
+        st.info("لا توجد فرص كافية الثقة داخل الرياض حسب حد العقود الحالي. خفف حد العقود أو وسّع النطاق الزمني.")
         return
 
-    render_market_alerts(scores)
+    strategy = st.radio(
+        "اختر استراتيجيتك الاستثمارية",
+        ["متوازنة (نمو وسيولة)", "عائد إيجاري (سيولة وسعر)", "نمو رأسمالي (زخم سعري)"],
+        horizontal=True,
+        key="investor_strategy",
+    )
+
+    if strategy == "عائد إيجاري (سيولة وسعر)":
+        scores["score"] = scores["investor_score_yield"]
+        scores = scores.sort_values("score", ascending=False)
+    elif strategy == "نمو رأسمالي (زخم سعري)":
+        scores["score"] = scores["investor_score_growth"]
+        scores = scores.sort_values("score", ascending=False)
+    else:
+        scores["score"] = scores["investor_score_balanced"]
+        scores = scores.sort_values("score", ascending=False)
+
+    render_market_signals_platform(scores)
 
     opportunity_tab, comparison_tab, report_tab = st.tabs(
         ["Investment Opportunities", "مقارنة الأحياء", "AI Report Generator"]
@@ -2612,86 +2662,26 @@ def score_recommendation(score: float) -> str:
     return "قرار أولي: يحتاج تحقق إضافي"
 
 
-def render_market_alerts(scores: pd.DataFrame) -> None:
-    alerts = market_alerts(scores)
-    if not alerts:
+def render_market_signals_platform(scores: pd.DataFrame) -> None:
+    """Renders the new market signals as actionable decision cards."""
+    signals = detect_market_signals(scores)
+    if not signals:
         return
-    st.markdown("### تنبيهات سوق تعطي سببًا للعودة")
-    cols = st.columns(min(len(alerts), 4))
-    for index, alert in enumerate(alerts):
+
+    st.markdown("### إشارات السوق والقرار المقترح")
+    st.caption("يقوم المحلل برصد الإشارات التي قد تؤثر على قرارك الاستثماري ويقترح الخطوة التالية.")
+
+    cols = st.columns(min(len(signals), 3))
+    for index, signal in enumerate(signals):
         with cols[index % len(cols)]:
-            with st.container(border=True):
-                st.markdown(f"**{alert['title']}**")
-                st.write(alert["body"])
+            card_class = "alert-card" if signal["signal_type"] == "value_opportunity" else "decision-card"
+            st.markdown(f'<div class="{card_class}">', unsafe_allow_html=True)
+            st.markdown(f"<h3>{signal['title']}</h3>", unsafe_allow_html=True)
+            st.markdown(f"<p>{signal['body']}</p>", unsafe_allow_html=True)
+            st.success(str(signal["decision"]))
+            st.markdown("</div>", unsafe_allow_html=True)
 
-
-def market_alerts(scores: pd.DataFrame) -> list[dict[str, str]]:
-    if scores.empty:
-        return []
-
-    alerts: list[dict[str, str]] = []
-    top = scores.iloc[0]
-    alerts.append(
-        {
-            "title": "فرصة جديدة في أعلى القائمة",
-            "body": (
-                f"{top['neighborhood']} | {top['property_type']} وصلت إلى "
-                f"{safe_float(top.get('property_score', 0)):,.1f}/100 مع {safe_float(top.get('total_deals', 0)):,.0f} عقد."
-            ),
-        }
-    )
-
-    undervalued = scores[
-        (scores["price_gap_pct"].notna())
-        & (scores["price_gap_pct"] <= -8)
-        & (scores["demand_rank"] >= 0.55)
-    ].sort_values("property_score", ascending=False)
-    if not undervalued.empty:
-        row = undervalued.iloc[0]
-        alerts.append(
-            {
-                "title": "سعر أقل من متوسط السوق",
-                "body": (
-                    f"{row['neighborhood']} | {row['property_type']} أقل من متوسط الرياض لنفس النوع "
-                    f"بنحو {abs(safe_float(row.get('price_gap_pct', 0))):.1f}% مع طلب قابل للقياس."
-                ),
-            }
-        )
-
-    moving = scores[
-        (scores["growth_pct"].notna())
-        & (scores["growth_pct"] >= 8)
-        & (scores["total_deals"] >= scores["total_deals"].median())
-    ].sort_values("growth_pct", ascending=False)
-    if not moving.empty:
-        row = moving.iloc[0]
-        alerts.append(
-            {
-                "title": "حي بدأ يتحرك",
-                "body": (
-                    f"{row['neighborhood']} | {row['property_type']} سجل نموًا "
-                    f"{format_pct_text(row.get('growth_pct'))} مع سيولة أعلى من متوسط القائمة."
-                ),
-            }
-        )
-
-    liquid = scores[
-        (scores["deals_growth_pct"].notna())
-        & (scores["deals_growth_pct"] >= 15)
-    ].sort_values("deals_growth_pct", ascending=False)
-    if not liquid.empty:
-        row = liquid.iloc[0]
-        alerts.append(
-            {
-                "title": "نشاط صفقات متسارع",
-                "body": (
-                    f"{row['neighborhood']} | {row['property_type']} ارتفع نشاط العقود "
-                    f"{format_pct_text(row.get('deals_growth_pct'))} مقارنة بالفترة السابقة."
-                ),
-            }
-        )
-
-    return alerts[:4]
+    st.divider()
 
 
 def render_neighborhood_comparison_engine(scores: pd.DataFrame) -> None:
@@ -2836,7 +2826,7 @@ def build_investor_report(
     period = period_label(riyadh) or "آخر فترة متاحة"
     top = scores.head(5)
     best = top.iloc[0]
-    alerts = market_alerts(scores)
+    alerts = detect_market_signals(scores)
     average_score = safe_float(scores["property_score"].mean(), 0)
     high_confidence = scores[scores["total_deals"] >= max(min_deals * 3, min_deals)]
 

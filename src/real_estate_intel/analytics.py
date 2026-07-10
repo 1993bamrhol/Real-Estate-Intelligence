@@ -179,13 +179,24 @@ def opportunity_scores(frame: pd.DataFrame, min_deals: int = 10) -> pd.DataFrame
     latest["affordability_rank"] = 1 - latest["average_rent"].rank(pct=True)
 
     # 4. Final Property Score (weighted decision metric)
-    # This is the core decision engine. It balances finding a liquid, growing, and affordable market.
-    latest["score"] = (
-        latest["liquidity_rank"] * 40  # Weight for market activity
-        + latest["growth_rank"] * 35  # Weight for upward momentum
-        + latest["affordability_rank"] * 25  # Weight for entry price attractiveness
-    )
-    return latest.sort_values("score", ascending=False)
+    latest["investor_score_balanced"] = (
+        latest["liquidity_rank"] * 40
+        + latest["growth_rank"] * 35
+        + latest["affordability_rank"] * 25
+    ).clip(0, 100)
+    latest["investor_score_yield"] = (
+        latest["liquidity_rank"] * 50
+        + latest["affordability_rank"] * 30
+        + latest["growth_rank"] * 20
+    ).clip(0, 100)
+    latest["investor_score_growth"] = (
+        latest["growth_rank"] * 50
+        + latest["liquidity_rank"] * 30
+        + latest["affordability_rank"] * 20
+    ).clip(0, 100)
+
+    latest["score"] = latest["investor_score_balanced"]
+    return latest.sort_values("investor_score_balanced", ascending=False)
 
 
 def top_growth_markets(frame: pd.DataFrame, min_deals: int = 10) -> pd.DataFrame:
@@ -201,3 +212,69 @@ def top_growth_markets(frame: pd.DataFrame, min_deals: int = 10) -> pd.DataFrame
         & (market["previous_total_deals"] >= min_deals)
     ].copy()
     return latest.dropna(subset=["growth_pct"]).sort_values("growth_pct", ascending=False)
+
+
+def detect_market_signals(scores: pd.DataFrame) -> list[dict[str, object]]:
+    """
+    Analyzes the latest market scores to detect actionable signals for investors.
+    This moves from "what happened" to "what might happen and what to do".
+    """
+    if scores.empty:
+        return []
+
+    signals: list[dict[str, object]] = []
+    top = scores.iloc[0]
+    signals.append(
+        {
+            "signal_type": "new_leader",
+            "title": "فرصة جديدة في أعلى القائمة",
+            "body": (
+                f"{top['neighborhood']} | {top['property_type']} وصلت إلى "
+                f"{top.get('property_score', 0):,.1f}/100 مع {top.get('total_deals', 0):,.0f} عقد."
+            ),
+            "decision": "القرار: هذه هي أقوى فرصة حاليًا حسب المعادلة. ابدأ التحليل منها.",
+            "row": top,
+        }
+    )
+
+    # Signal: Price is attractive compared to the rest of the market, with decent demand.
+    undervalued = scores[
+        (scores["price_gap_pct"].notna())
+        & (scores["price_gap_pct"] <= -8)
+        & (scores["demand_rank"] >= 0.55)
+    ].sort_values("property_score", ascending=False)
+    if not undervalued.empty:
+        row = undervalued.iloc[0]
+        signals.append(
+            {
+                "signal_type": "value_opportunity",
+                "title": "إشارة سعرية جاذبة",
+                "body": (
+                    f"{row['neighborhood']} | {row['property_type']} أقل من متوسط الرياض بنحو "
+                    f"{abs(row.get('price_gap_pct', 0)):.1f}% مع طلب جيد."
+                ),
+                "decision": "القرار: قد تكون فرصة للحصول على صفقة. تحقق من حالة العقار والشارع لتبرير الفارق.",
+                "row": row,
+            }
+        )
+
+    # Signal: A market segment is showing strong upward momentum in rent.
+    moving = scores[
+        (scores["growth_pct"].notna()) & (scores["growth_pct"] >= 8) & (scores["demand_rank"] >= 0.6)
+    ].sort_values("growth_pct", ascending=False)
+    if not moving.empty:
+        row = moving.iloc[0]
+        signals.append(
+            {
+                "signal_type": "momentum",
+                "title": "إشارة زخم إيجابي (حي يتحرك)",
+                "body": (
+                    f"{row['neighborhood']} | {row['property_type']} سجل نموًا {row.get('growth_pct'):.1f}% "
+                    "مع سيولة أعلى من المتوسط."
+                ),
+                "decision": "القرار: الزخم قد يستمر. الدخول الآن قد يسبق ارتفاعات إضافية. لا تنتظر طويلاً للدراسة.",
+                "row": row,
+            }
+        )
+
+    return signals[:4]
