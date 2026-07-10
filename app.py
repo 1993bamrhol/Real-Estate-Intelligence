@@ -1692,22 +1692,26 @@ def safe_float(value: object, default: float = 0.0) -> float:
 
 
 def assistant_decision(row: pd.Series, ranking: pd.DataFrame, mode: str, min_deals: int) -> str:
+    """Generates a clear, actionable decision based on the analysis."""
     score = safe_float(row.get("score", 0))
     deals = safe_float(row.get("total_deals", 0))
     growth = row.get("growth_pct", pd.NA)
 
     if mode == "risk":
         if deals < min_deals * 2:
-            return "القرار: لا تعتمد عليها وحدها؛ حجم العقود قريب من الحد الأدنى."
+            return "القرار: تجنب الاعتماد عليها وحدها؛ حجم العقود قريب من الحد الأدنى، مما يرفع المخاطرة."
         if not pd.isna(growth) and abs(float(growth)) >= 35:
-            return "القرار: فرصة تحتاج تحقق ميداني؛ النمو حاد وقد يكون استثنائيا."
-        return "القرار: المخاطر مقبولة مبدئيا مع ضرورة التحقق من تفاصيل الحي والعقار."
+            return "القرار: فرصة تحتاج تحققًا ميدانيًا؛ النمو حاد وقد يكون استثنائيًا وغير مستدام."
+        return "القرار: المخاطر مقبولة مبدئيًا مع ضرورة التحقق من تفاصيل الحي والعقار."
 
-    if score >= 75 and deals >= min_deals * 3:
-        return "القرار: فرصة قابلة للدراسة الآن ضمن البيانات المتاحة."
-    if score >= 55:
-        return "القرار: فرصة واعدة، لكن تحتاج مقارنة بديلين قبل التحرك."
-    return "القرار: راقبها ولا تعتبرها أولوية إلا إذا كان لديك سبب محلي إضافي."
+    # Decision logic based on the calculated Property Score and deal volume
+    if score >= 75 and deals >= min_deals * 4:
+        return "القرار: فرصة قوية وقابلة للدراسة الفورية. المؤشرات تدعم التحرك."
+    if score >= 65 and deals >= min_deals * 2:
+        return "القرار: فرصة جيدة. ضعها في قائمة المتابعة وقارنها ببديلين قبل اتخاذ قرار."
+    if score >= 50:
+        return "القرار: فرصة متوسطة. مناسبة للمراقبة، لكن لا تعتبر أولوية إلا إذا كان لديك سبب محلي إضافي."
+    return "القرار: فرصة ضعيفة حاليًا. ابحث عن بدائل أقوى في قاعدة البيانات."
 
 
 def assistant_reasons(row: pd.Series, ranking: pd.DataFrame, mode: str) -> list[str]:
@@ -1721,15 +1725,15 @@ def assistant_reasons(row: pd.Series, ranking: pd.DataFrame, mode: str) -> list[
     median_rent = float(ranking["average_rent"].median()) if "average_rent" in ranking and not ranking.empty else 0
 
     if score:
-        reasons.append(f"درجة الفرصة {score:,.1f} لأنها تجمع الطلب والنمو وجاذبية السعر.")
+        reasons.append(f"درجة الفرصة {score:,.1f}/100، وهي تجمع السيولة، النمو، وجاذبية السعر.")
     if median_deals and deals >= median_deals:
-        reasons.append(f"الطلب أعلى من وسيط النتائج المعروضة: {deals:,.0f} عقد.")
+        reasons.append(f"السيولة (الطلب) أعلى من وسيط النتائج المعروضة: {deals:,.0f} عقد.")
     elif deals:
-        reasons.append(f"الطلب متاح لكنه ليس الأعلى بين البدائل: {deals:,.0f} عقد.")
+        reasons.append(f"السيولة (الطلب) متاحة لكنها ليست الأعلى بين البدائل: {deals:,.0f} عقد.")
     if median_rent and rent <= median_rent:
         reasons.append(f"متوسط الإيجار أقل من وسيط النتائج، ما يعزز جاذبية الدخول: {format_sar(rent)}.")
     elif rent:
-        reasons.append(f"متوسط الإيجار أعلى نسبيا، لذلك يحتاج تبريرا من الموقع أو جودة الأصل: {format_sar(rent)}.")
+        reasons.append(f"متوسط الإيجار أعلى نسبيًا، لذلك يحتاج تبريرًا من الموقع أو جودة الأصل: {format_sar(rent)}.")
     if not pd.isna(growth):
         growth_text = format_pct_text(float(growth))
         if mode == "growth" or float(growth) > 0:

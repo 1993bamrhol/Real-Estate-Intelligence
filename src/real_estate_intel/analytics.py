@@ -167,14 +167,23 @@ def opportunity_scores(frame: pd.DataFrame, min_deals: int = 10) -> pd.DataFrame
     if latest.empty:
         return latest
 
-    latest["demand_rank"] = latest["total_deals"].rank(pct=True)
+    # 1. Liquidity Score (based on deal volume) - How active is this segment?
+    latest["liquidity_rank"] = latest["total_deals"].rank(pct=True)
+    latest["liquidity_score"] = latest["liquidity_rank"] * 100
+
+    # 2. Growth Score (based on rent growth) - Is this segment moving up?
     latest["growth_pct"] = latest["growth_pct"].fillna(0)
     latest["growth_rank"] = latest["growth_pct"].clip(lower=-50, upper=50).rank(pct=True)
+
+    # 3. Affordability Score (based on relative rent) - Is it priced attractively?
     latest["affordability_rank"] = 1 - latest["average_rent"].rank(pct=True)
+
+    # 4. Final Property Score (weighted decision metric)
+    # This is the core decision engine. It balances finding a liquid, growing, and affordable market.
     latest["score"] = (
-        latest["demand_rank"] * 45
-        + latest["growth_rank"] * 35
-        + latest["affordability_rank"] * 20
+        latest["liquidity_rank"] * 40  # Weight for market activity
+        + latest["growth_rank"] * 35  # Weight for upward momentum
+        + latest["affordability_rank"] * 25  # Weight for entry price attractiveness
     )
     return latest.sort_values("score", ascending=False)
 
