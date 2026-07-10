@@ -1,4 +1,8 @@
-# Install the local package from pyproject.toml
-# This single line tells pip to install the project defined in pyproject.toml
-# and all its dependencies listed there.
-.
+# List of explicit dependencies for the project.
+# It's recommended to generate this file using `pip freeze > requirements.txt`
+pandas>=2.0
+plotly>=6.0
+requests>=2.32
+streamlit>=1.30
+sqlalchemy>=2.0
+psycopg2-binary>=2.9

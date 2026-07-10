@@ -1,17 +1,21 @@
+# Python
 __pycache__/
-*.py[cod]
-*.log
-.streamlit/secrets.toml
+*.pyc
+*.pyo
+*.pyd
 
-# Raw source downloads are reproducible and can be large.
-data/raw/*.csv
-data/catalog/*.json
+# Virtual Environments
+.venv
+venv/
+ENV/
 
-# Keep the compact deployable snapshot in git.
-!data/processed/
-!data/processed/rental_market.csv.gz
+# IDEs and Editors
+.vscode/
+.idea/
 
-# Local analytical warehouse is rebuilt from the snapshot/raw data.
-data/warehouse/*.sqlite
-data/warehouse/*.sqlite-*
-!data/warehouse/.gitkeep
+# Project-specific data to ignore (as per README)
+/data/raw/
+/data/catalog/
+
+# OS-specific
+.DS_Store
