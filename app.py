@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from html import escape
 import re
-import sys
 from pathlib import Path
+
+# Add the src directory to the Python path for Streamlit Cloud deployment
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 import pandas as pd
 import plotly.express as px
