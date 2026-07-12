@@ -7,8 +7,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+SRC_TEXT = str(SRC)
+while SRC_TEXT in sys.path:
+    sys.path.remove(SRC_TEXT)
+sys.path.insert(0, SRC_TEXT)
+
+# Streamlit Cloud can retain an older installed package between deploys.
+# Remove only modules loaded outside this checkout so imports resolve to SRC.
+for module_name, module in list(sys.modules.items()):
+    if module_name == "real_estate_intel" or module_name.startswith("real_estate_intel."):
+        module_file = str(getattr(module, "__file__", "") or "")
+        if module_file and not module_file.startswith(SRC_TEXT):
+            del sys.modules[module_name]
 
 import pandas as pd
 import plotly.express as px
