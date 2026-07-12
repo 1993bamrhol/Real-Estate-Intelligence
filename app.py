@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from html import escape
 import re
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 import pandas as pd
 import plotly.express as px
@@ -31,9 +37,6 @@ from real_estate_intel.official_sources import (
 )
 from real_estate_intel.reporting import build_investment_memo_html
 from real_estate_intel.underwriting import PropertyAssumptions, analyze_property, stress_test_property
-
-
-ROOT = Path(__file__).resolve().parent
 
 st.set_page_config(page_title="Real Estate Intelligence", layout="wide")
 
