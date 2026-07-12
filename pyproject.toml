@@ -5,8 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "real-estate-intel"
 version = "0.1.0"
-packages = ["real_estate_intel"]
-package_dir = {"" = "src"}
+requires-python = ">=3.10"
 dependencies = [
     "pandas>=2.0",
     "plotly>=6.0",
@@ -15,3 +14,7 @@ dependencies = [
     "sqlalchemy>=2.0",
     "psycopg2-binary>=2.9",
 ]
+
+[tool.setuptools]
+packages = ["real_estate_intel"]
+package-dir = {"" = "src"}

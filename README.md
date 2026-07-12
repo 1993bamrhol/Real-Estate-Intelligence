@@ -16,7 +16,7 @@
 ## التشغيل المحلي
 
 ```powershell
-pip install -r requirements.txt
+pip install -e .
 streamlit run app.py --server.port 8504
 ```
 

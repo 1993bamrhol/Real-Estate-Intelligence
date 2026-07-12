@@ -25,33 +25,52 @@ def get_db_connection_string() -> str | None:
     Returns a PostgreSQL connection string from environment variables if available.
     Example: "postgresql://user:password@host:port/database"
     """
-    return os.environ.get("DATABASE_URL")
+    value = os.environ.get("DATABASE_URL", "").strip()
+    if value.startswith("postgres://"):
+        value = "postgresql://" + value.removeprefix("postgres://")
+    return value or None
 
 
-def load_market_data(source: pd.DataFrame, db_path: Path = WAREHOUSE_PATH) -> pd.DataFrame:
-    if source.empty:
-        return source.copy()
+def create_postgres_engine(db_url: str):
+    """Create a resilient SQLAlchemy engine for Supabase or PostgreSQL."""
+    return create_engine(
+        db_url,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        connect_args={"connect_timeout": 15},
+    )
 
+
+def load_local_fallback() -> pd.DataFrame:
+    """Load SQLite first, then the published CSV snapshot."""
+    if WAREHOUSE_PATH.exists():
+        try:
+            with sqlite3.connect(WAREHOUSE_PATH) as connection:
+                data = pd.read_sql_query(f"select * from {CLEAN_TABLE}", connection)
+            if not data.empty:
+                return restore_market_types(data)
+        except (sqlite3.Error, pd.errors.DatabaseError):
+            pass
+
+    from real_estate_intel.data_prep import load_rental_data
+
+    return restore_market_types(load_rental_data())
+
+
+def load_market_data() -> pd.DataFrame:
     db_url = get_db_connection_string()
-
-    try:
-        if db_url:
-            engine = create_engine(db_url)
+    if db_url:
+        try:
+            engine = create_postgres_engine(db_url)
             with engine.connect() as connection:
-                # For production, you might not rebuild the warehouse on every run.
-                # This is simplified for demonstration.
-                if not pd.io.sql.has_table(CLEAN_TABLE, connection):
-                    build_pg_warehouse(source, engine)
-                data = pd.read_sql_query(f"select * from {CLEAN_TABLE}", connection)
-        else:
-            build_sqlite_warehouse(source, db_path)
-            with sqlite3.connect(db_path) as connection:
-                data = pd.read_sql_query(f"select * from {CLEAN_TABLE}", connection)
-    except Exception:
-        # Fallback to in-memory processing if database fails
-        return source.copy()
+                if not pd.io.sql.has_table(CLEAN_TABLE, connection, schema=None):
+                    return load_local_fallback()
+                data = pd.read_sql_query(text(f"select * from {CLEAN_TABLE}"), connection)
+            return restore_market_types(data)
+        except Exception as exc:
+            print(f"PostgreSQL unavailable; using local data fallback: {exc}")
 
-    return restore_market_types(data)
+    return load_local_fallback()
 
 
 def build_pg_warehouse(source: pd.DataFrame, engine) -> None:
@@ -83,15 +102,17 @@ def build_sqlite_warehouse(source: pd.DataFrame, db_path: Path = WAREHOUSE_PATH)
     source_registry = official_sources_frame()
     metric_lineage = metric_lineage_frame()
 
-    with sqlite3.connect(db_path) as connection:
-        clean.to_sql(CLEAN_TABLE, connection, if_exists="replace", index=False)
-        signals.to_sql(SIGNALS_TABLE, connection, if_exists="replace", index=False)
-        quality.to_sql(QUALITY_TABLE, connection, if_exists="replace", index=False)
-        source_registry.to_sql(SOURCE_REGISTRY_TABLE, connection, if_exists="replace", index=False)
-        metric_lineage.to_sql(METRIC_LINEAGE_TABLE, connection, if_exists="replace", index=False)
-        connection.execute(text(f"create index if not exists idx_clean_period_city on {CLEAN_TABLE}(period_index, city_ar)"))
-        connection.execute(text(f"create index if not exists idx_clean_location on {CLEAN_TABLE}(location_ar)"))
-        connection.execute(text(f"create index if not exists idx_signals_entity on {SIGNALS_TABLE}(location_ar, property_type)"))
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.connect() as connection:
+        with connection.begin():
+            clean.to_sql(CLEAN_TABLE, connection, if_exists="replace", index=False)
+            signals.to_sql(SIGNALS_TABLE, connection, if_exists="replace", index=False)
+            quality.to_sql(QUALITY_TABLE, connection, if_exists="replace", index=False)
+            source_registry.to_sql(SOURCE_REGISTRY_TABLE, connection, if_exists="replace", index=False)
+            metric_lineage.to_sql(METRIC_LINEAGE_TABLE, connection, if_exists="replace", index=False)
+            connection.execute(text(f"create index if not exists idx_clean_period_city on {CLEAN_TABLE}(period_index, city_ar)"))
+            connection.execute(text(f"create index if not exists idx_clean_location on {CLEAN_TABLE}(location_ar)"))
+            connection.execute(text(f"create index if not exists idx_signals_entity on {SIGNALS_TABLE}(location_ar, property_type)"))
 
 
 def prepare_clean_market(source: pd.DataFrame) -> pd.DataFrame:
@@ -191,28 +212,50 @@ def restore_market_types(data: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
-def warehouse_status(db_path: Path = WAREHOUSE_PATH) -> dict[str, object]:
-    if not db_path.exists():
-        return {"ready": False, "path": str(db_path)}
+def warehouse_status() -> dict[str, object]:
+    db_url = get_db_connection_string()
+    if db_url:
+        return pg_warehouse_status(db_url)
 
+    if not WAREHOUSE_PATH.exists():
+        return {"ready": False, "path": str(WAREHOUSE_PATH), "type": "SQLite"}
     try:
-        with sqlite3.connect(db_path) as connection:
+        with sqlite3.connect(WAREHOUSE_PATH) as connection:
             quality = pd.read_sql_query(f"select metric, value from {QUALITY_TABLE}", connection)
             source_registry = pd.read_sql_query(
                 f"select source_id, active from {SOURCE_REGISTRY_TABLE}",
                 connection,
             )
     except sqlite3.Error:
-        return {"ready": False, "path": str(db_path)}
+        return {"ready": False, "path": str(WAREHOUSE_PATH), "type": "SQLite"}
 
     values = {str(row["metric"]): row["value"] for _, row in quality.iterrows()}
     active_sources = int(source_registry["active"].astype(bool).sum()) if not source_registry.empty else 0
     return {
         "ready": True,
-        "path": str(db_path),
+        "path": str(WAREHOUSE_PATH),
+        "type": "SQLite",
         "rows": values.get("rows", 0),
         "latest_period": values.get("latest_period", ""),
         "locations": values.get("locations", 0),
         "sources": values.get("sources", 0),
         "official_sources": active_sources,
+    }
+
+
+def pg_warehouse_status(db_url: str) -> dict[str, object]:
+    engine = create_postgres_engine(db_url)
+    try:
+        with engine.connect() as connection:
+            if not pd.io.sql.has_table(QUALITY_TABLE, connection, schema=None):
+                return {"ready": False, "path": "PostgreSQL", "type": "PostgreSQL"}
+            quality = pd.read_sql_query(text(f"select metric, value from {QUALITY_TABLE}"), connection)
+            source_registry = pd.read_sql_query(text(f"select source_id, active from {SOURCE_REGISTRY_TABLE}"), connection)
+    except Exception:
+        return {"ready": False, "path": "PostgreSQL", "type": "PostgreSQL"}
+
+    values = {str(row["metric"]): row["value"] for _, row in quality.iterrows()}
+    active_sources = int(source_registry["active"].astype(bool).sum()) if not source_registry.empty else 0
+    return {
+        "ready": True, "path": "PostgreSQL", "type": "PostgreSQL", **values, "official_sources": active_sources
     }
