@@ -35,7 +35,15 @@ jobs:
         run: python -m pip install .
 
       - name: Download the current REGA catalog
-        run: python scripts/fetch_rega_data.py --seed-only --crawl-pages 80 --page-size 100 --force
+        id: fetch
+        continue-on-error: true
+        run: python scripts/fetch_rega_data.py --seed-only --crawl-pages 80 --page-size 100 --force --timeout 20
+
+      - name: Report source availability
+        if: ${{ steps.fetch.outcome == 'failure' }}
+        run: |
+          echo "## REGA source warning" >> "$GITHUB_STEP_SUMMARY"
+          echo "The official portal was unavailable. The workflow retained the last validated snapshot." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build the published snapshot
         run: python scripts/build_data_snapshot.py
@@ -54,6 +62,12 @@ jobs:
       - name: Update the Supabase warehouse
         if: ${{ env.DATABASE_URL != '' }}
         run: python scripts/build_warehouse.py
+
+      - name: Confirm Supabase configuration
+        if: ${{ env.DATABASE_URL == '' }}
+        run: |
+          echo "## Supabase warning" >> "$GITHUB_STEP_SUMMARY"
+          echo "DATABASE_URL is not configured; only fallback files were refreshed." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Commit refreshed fallback data
         run: |

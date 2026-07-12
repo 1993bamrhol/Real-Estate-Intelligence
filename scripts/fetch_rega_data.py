@@ -24,7 +24,7 @@ def main() -> None:
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     CATALOG_DIR.mkdir(parents=True, exist_ok=True)
 
-    client = OpenDataClient()
+    client = OpenDataClient(timeout=args.timeout)
     datasets = []
 
     if args.seed_only or not args.crawl_pages:
@@ -50,6 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--crawl-pages", type=int, default=0, help="Crawl N public catalog pages and filter REGA.")
     parser.add_argument("--page-size", type=int, default=100, help="Catalog page size.")
     parser.add_argument("--force", action="store_true", help="Overwrite existing raw files.")
+    parser.add_argument("--timeout", type=int, default=60, help="HTTP timeout in seconds per request.")
     return parser.parse_args()
 
 
