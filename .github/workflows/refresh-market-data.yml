@@ -1,0 +1,68 @@
+name: Refresh market data
+
+on:
+  schedule:
+    - cron: "17 3 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-market-data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install project
+        run: python -m pip install .
+
+      - name: Download the current REGA catalog
+        run: python scripts/fetch_rega_data.py --seed-only --crawl-pages 80 --page-size 100 --force
+
+      - name: Build the published snapshot
+        run: python scripts/build_data_snapshot.py
+
+      - name: Reject stale or regressed data
+        run: python scripts/check_data_freshness.py --max-quarter-lag 4 --min-rows 40000 --min-regions 13
+
+      - name: Build the SQLite fallback
+        run: python scripts/build_data_engine.py
+        env:
+          DATABASE_URL: ""
+
+      - name: Validate the release
+        run: python scripts/validate_release.py
+
+      - name: Update the Supabase warehouse
+        if: ${{ env.DATABASE_URL != '' }}
+        run: python scripts/build_warehouse.py
+
+      - name: Commit refreshed fallback data
+        run: |
+          if git diff --quiet -- data/processed/rental_market.csv.gz data/warehouse/real_estate.sqlite; then
+            echo "No published data changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/processed/rental_market.csv.gz data/warehouse/real_estate.sqlite
+          git commit -m "chore: refresh market data"
+          git push origin main

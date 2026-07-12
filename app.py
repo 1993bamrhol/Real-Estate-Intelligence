@@ -29,6 +29,7 @@ from real_estate_intel.official_sources import (
     official_source_summary,
     official_sources_frame,
 )
+from real_estate_intel.underwriting import PropertyAssumptions, analyze_property
 
 
 ROOT = Path(__file__).resolve().parent
@@ -3105,8 +3106,44 @@ def render_property_valuation_engine(riyadh: pd.DataFrame) -> None:
             key="valuation_gap_pct",
         )
 
+        with st.expander("افتراضات الاستثمار والتمويل", expanded=True):
+            occupancy_pct = st.slider("نسبة الإشغال المتوقعة (%)", 50, 100, 90, key="valuation_occupancy")
+            operating_expense_pct = st.slider(
+                "المصاريف التشغيلية من الدخل (%)", 0, 50, 15, key="valuation_opex"
+            )
+            annual_maintenance = st.number_input(
+                "الصيانة السنوية (ر.س)", min_value=0, value=5_000, step=1_000, key="valuation_maintenance"
+            )
+            down_payment_pct = st.slider("الدفعة الأولى (%)", 10, 100, 30, key="valuation_down_payment")
+            interest_rate_pct = st.number_input(
+                "نسبة التمويل السنوية (%)", min_value=0.0, value=5.5, step=0.25, key="valuation_interest"
+            )
+            loan_years = st.slider("مدة التمويل (سنة)", 5, 30, 20, key="valuation_loan_years")
+            acquisition_cost_pct = st.number_input(
+                "تكاليف الشراء والإفراغ (%)", min_value=0.0, value=2.5, step=0.5, key="valuation_acquisition"
+            )
+            target_net_yield_pct = st.number_input(
+                "العائد الصافي المستهدف (%)", min_value=0.5, value=5.0, step=0.25, key="valuation_target_yield"
+            )
+
     market = district_market_snapshot(riyadh, district, property_type)
     result = evaluate_property_price(float(price), float(area), float(market_gap_pct), market)
+    underwriting = analyze_property(
+        PropertyAssumptions(
+            purchase_price=float(price),
+            annual_rent=safe_float(market.get("average_rent", 0)),
+            occupancy_pct=float(occupancy_pct),
+            operating_expense_pct=float(operating_expense_pct),
+            annual_maintenance=float(annual_maintenance),
+            down_payment_pct=float(down_payment_pct),
+            interest_rate_pct=float(interest_rate_pct),
+            loan_years=int(loan_years),
+            acquisition_cost_pct=float(acquisition_cost_pct),
+            target_net_yield_pct=float(target_net_yield_pct),
+            market_fair_price=result["estimated_market_price"],
+            market_demand_rank=safe_float(market.get("demand_rank", 0.5), 0.5),
+        )
+    )
     with right:
         st.metric("السعر لكل م²", f"{result['price_per_sqm']:,.0f} ر.س")
         st.metric("متوسط إيجار الحي", format_sar(market["average_rent"]))
@@ -3118,6 +3155,38 @@ def render_property_valuation_engine(riyadh: pd.DataFrame) -> None:
             format_sar(result["premium_amount"]),
             f"{market_gap_pct:+.1f}%",
         )
+
+        st.markdown("### قرار الاستثمار للعقار")
+        decision_labels = {"buy": "شراء", "negotiate": "تفاوض", "reject": "رفض"}
+        decision = str(underwriting["decision"])
+        decision_text = decision_labels.get(decision, decision)
+        if decision == "buy":
+            st.success(f"القرار: {decision_text} | درجة الصفقة {underwriting['deal_score']:.1f}/100")
+        elif decision == "negotiate":
+            st.warning(f"القرار: {decision_text} | درجة الصفقة {underwriting['deal_score']:.1f}/100")
+        else:
+            st.error(f"القرار: {decision_text} | درجة الصفقة {underwriting['deal_score']:.1f}/100")
+
+        metric_a, metric_b = st.columns(2)
+        metric_a.metric("العائد الصافي", f"{underwriting['net_yield_pct']:.2f}%")
+        metric_b.metric("التدفق النقدي السنوي", format_sar(float(underwriting["annual_cash_flow"])))
+        metric_c, metric_d = st.columns(2)
+        metric_c.metric("العائد على النقد", f"{underwriting['cash_on_cash_pct']:.2f}%")
+        dscr_text = "بدون تمويل" if underwriting["dscr"] == float("inf") else f"{underwriting['dscr']:.2f}x"
+        metric_d.metric("تغطية القسط DSCR", dscr_text)
+
+        payback_text = (
+            f"{underwriting['payback_years']:.1f} سنة"
+            if underwriting["payback_years"] != float("inf")
+            else "لا يسترد نقديًا"
+        )
+        st.caption(
+            f"فترة استرداد النقد: {payback_text} | إشغال التعادل: "
+            f"{underwriting['break_even_occupancy_pct']:.1f}% | القيمة العادلة المدمجة: "
+            f"{format_sar(float(underwriting['blended_fair_price']))}"
+        )
+        if float(underwriting["negotiation_amount"]) > 0:
+            st.info(f"مبلغ التفاوض المقترح: {format_sar(float(underwriting['negotiation_amount']))}")
 
         status, message = valuation_message(float(market_gap_pct), result["negotiation_to_fair"], result, market)
         if status == "good":
