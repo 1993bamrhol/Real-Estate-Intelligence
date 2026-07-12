@@ -29,7 +29,8 @@ from real_estate_intel.official_sources import (
     official_source_summary,
     official_sources_frame,
 )
-from real_estate_intel.underwriting import PropertyAssumptions, analyze_property
+from real_estate_intel.reporting import build_investment_memo_html
+from real_estate_intel.underwriting import PropertyAssumptions, analyze_property, stress_test_property
 
 
 ROOT = Path(__file__).resolve().parent
@@ -3128,8 +3129,7 @@ def render_property_valuation_engine(riyadh: pd.DataFrame) -> None:
 
     market = district_market_snapshot(riyadh, district, property_type)
     result = evaluate_property_price(float(price), float(area), float(market_gap_pct), market)
-    underwriting = analyze_property(
-        PropertyAssumptions(
+    assumptions = PropertyAssumptions(
             purchase_price=float(price),
             annual_rent=safe_float(market.get("average_rent", 0)),
             occupancy_pct=float(occupancy_pct),
@@ -3142,8 +3142,10 @@ def render_property_valuation_engine(riyadh: pd.DataFrame) -> None:
             target_net_yield_pct=float(target_net_yield_pct),
             market_fair_price=result["estimated_market_price"],
             market_demand_rank=safe_float(market.get("demand_rank", 0.5), 0.5),
-        )
+            market_sample_size=int(safe_float(market.get("total_deals", 0))),
     )
+    underwriting = analyze_property(assumptions)
+    stress_test = stress_test_property(assumptions)
     with right:
         st.metric("السعر لكل م²", f"{result['price_per_sqm']:,.0f} ر.س")
         st.metric("متوسط إيجار الحي", format_sar(market["average_rent"]))
@@ -3187,6 +3189,62 @@ def render_property_valuation_engine(riyadh: pd.DataFrame) -> None:
         )
         if float(underwriting["negotiation_amount"]) > 0:
             st.info(f"مبلغ التفاوض المقترح: {format_sar(float(underwriting['negotiation_amount']))}")
+
+        confidence_labels = {"high": "عالية", "medium": "متوسطة", "low": "منخفضة"}
+        st.markdown("### اختبار الضغط وحد الشراء")
+        stress_a, stress_b, stress_c = st.columns(3)
+        stress_a.metric("تحمل السيناريوهات", f"{stress_test['resilience_pct']:.0f}%")
+        stress_b.metric("أقصى سعر شراء آمن", format_sar(float(stress_test["risk_adjusted_max_offer"])))
+        stress_c.metric("ثقة القرار", confidence_labels.get(str(stress_test["confidence"]), "منخفضة"))
+
+        scenario_rows = pd.DataFrame(stress_test["scenarios"])
+        scenario_rows["القرار"] = scenario_rows["decision"].map(decision_labels)
+        scenario_table = scenario_rows.rename(
+            columns={
+                "label": "السيناريو",
+                "annual_cash_flow": "التدفق السنوي",
+                "net_yield_pct": "العائد الصافي %",
+                "dscr": "DSCR",
+                "deal_score": "درجة الصفقة",
+            }
+        )[["السيناريو", "التدفق السنوي", "العائد الصافي %", "DSCR", "درجة الصفقة", "القرار"]]
+        st.dataframe(
+            scenario_table.style.format(
+                {
+                    "التدفق السنوي": "{:,.0f}",
+                    "العائد الصافي %": "{:.2f}",
+                    "DSCR": lambda value: "بدون تمويل" if value == float("inf") else f"{value:.2f}",
+                    "درجة الصفقة": "{:.1f}",
+                }
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+        if float(price) > float(stress_test["risk_adjusted_max_offer"]):
+            reduction = float(price) - float(stress_test["risk_adjusted_max_offer"])
+            st.warning(f"السعر المطلوب يتجاوز حد الشراء الآمن بنحو {format_sar(reduction)}.")
+
+        memo_html = build_investment_memo_html(
+            property_details={
+                "city": "الرياض",
+                "district": district,
+                "property_type": property_type,
+                "area": area,
+                "price": price,
+            },
+            assumptions=assumptions.__dict__,
+            analysis=underwriting,
+            stress_test=stress_test,
+            market_context=market,
+        )
+        st.download_button(
+            "تنزيل مذكرة القرار الاستثماري",
+            data=memo_html.encode("utf-8-sig"),
+            file_name="investment-decision-memo.html",
+            mime="text/html",
+            key="download_investment_memo",
+            width="stretch",
+        )
 
         status, message = valuation_message(float(market_gap_pct), result["negotiation_to_fair"], result, market)
         if status == "good":
