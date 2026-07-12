@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+build/
+dist/
+*.egg-info/
 
 # Virtual Environments
 .venv
@@ -16,6 +19,9 @@ ENV/
 # Project-specific data to ignore (as per README)
 /data/raw/
 /data/catalog/
+
+# Local Streamlit secrets (never commit database credentials)
+.streamlit/secrets.toml
 
 # OS-specific
 .DS_Store
