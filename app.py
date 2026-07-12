@@ -4,10 +4,6 @@ from html import escape
 import re
 from pathlib import Path
 
-# Add the src directory to the Python path for Streamlit Cloud deployment
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -396,25 +392,15 @@ st.markdown(
 )
 
 
-@st.cache_data(show_spinner=False)
-def get_data(data_version: tuple[tuple[str, int, int], ...]) -> pd.DataFrame:
-    source = ensure_app_columns(load_rental_data())
-    return ensure_app_columns(load_market_data(source))
+@st.cache_data(show_spinner="Loading data from warehouse...")
+def get_data(_warehouse_version: str) -> pd.DataFrame:
+    """Load data from the warehouse, caching based on its version string."""
+    return ensure_app_columns(load_market_data())
 
 
-def raw_data_version() -> tuple[tuple[str, int, int], ...]:
-    raw_dir = ROOT / "data" / "raw"
-    snapshot = ROOT / "data" / "processed" / "rental_market.csv.gz"
-    versions = []
-    if snapshot.exists():
-        versions.append((str(snapshot.relative_to(ROOT)), snapshot.stat().st_mtime_ns, snapshot.stat().st_size))
-    if not raw_dir.exists():
-        return tuple(versions)
-    versions.extend(
-        (path.name, path.stat().st_mtime_ns, path.stat().st_size)
-        for path in sorted(raw_dir.glob("*.csv"))
-    )
-    return tuple(versions)
+def get_warehouse_version_string() -> str:
+    status = warehouse_status()
+    return f"{status.get('type')}-{status.get('rows')}-{status.get('latest_period')}"
 
 
 def ensure_app_columns(data: pd.DataFrame) -> pd.DataFrame:
@@ -1905,7 +1891,7 @@ def render_data_engine_status() -> None:
         if status.get("ready"):
             cols = st.columns(5)
             cols[0].metric("حالة القاعدة", "جاهزة")
-            cols[1].metric("السجلات", f"{safe_float(status.get('rows', 0)):,.0f}")
+            cols[1].metric("السجلات", f"{int(safe_float(status.get('rows', 0))):,.0f}")
             cols[2].metric("المواقع", f"{safe_float(status.get('locations', 0)):,.0f}")
             cols[3].metric("آخر فترة", str(status.get("latest_period", "-")))
             cols[4].metric("المصادر الرسمية", f"{safe_float(status.get('official_sources', 0)):,.0f}")
@@ -2327,7 +2313,7 @@ def scope_narrative(data: pd.DataFrame) -> str:
 
 
 def main() -> None:
-    data = ensure_app_columns(get_data(raw_data_version()))
+    data = get_data(get_warehouse_version_string())
     render_digital_header(data)
 
     if data.empty:

@@ -7,10 +7,10 @@ from typing import Any
 
 import pandas as pd
 
-
-CATALOG_PATH = Path("data/catalog/rega_catalog.json")
-RAW_DIR = Path("data/raw")
-SNAPSHOT_PATH = Path("data/processed/rental_market.csv.gz")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CATALOG_PATH = PROJECT_ROOT / "data" / "catalog" / "rega_catalog.json"
+RAW_DIR = PROJECT_ROOT / "data" / "raw"
+SNAPSHOT_PATH = PROJECT_ROOT / "data" / "processed" / "rental_market.csv.gz"
 
 COLUMN_ALIASES = {
     "year": "year",

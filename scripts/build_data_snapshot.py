@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from real_estate_intel.data_prep import SNAPSHOT_PATH, load_rental_data
 
@@ -12,7 +16,7 @@ def main() -> None:
     if data.empty:
         raise SystemExit("No rental data found. Run scripts/fetch_rega_data.py first.")
 
-    path = ROOT / SNAPSHOT_PATH
+    path = SNAPSHOT_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     data.to_csv(path, index=False, encoding="utf-8-sig", compression="gzip")
 
