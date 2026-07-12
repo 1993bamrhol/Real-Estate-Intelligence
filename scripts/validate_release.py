@@ -13,12 +13,14 @@ PYTHON_FILES = [
     ROOT / "app.py",
     ROOT / "scripts" / "fetch_rega_data.py",
     ROOT / "scripts" / "build_data_snapshot.py",
+    ROOT / "scripts" / "check_data_freshness.py",
     ROOT / "src" / "real_estate_intel" / "analytics.py",
     ROOT / "src" / "real_estate_intel" / "catalog.py",
     ROOT / "src" / "real_estate_intel" / "data_engine.py",
     ROOT / "src" / "real_estate_intel" / "official_sources.py",
     ROOT / "src" / "real_estate_intel" / "data_prep.py",
     ROOT / "src" / "real_estate_intel" / "rega_client.py",
+    ROOT / "src" / "real_estate_intel" / "underwriting.py",
 ]
 
 
@@ -37,6 +39,10 @@ def main() -> None:
         raise SystemExit(f"Validation failed: missing columns {sorted(missing)}.")
     if data["region_ar"].nunique() < 5:
         raise SystemExit("Validation failed: market coverage is too narrow.")
+
+    from check_data_freshness import validate_freshness
+
+    validate_freshness()
 
     from streamlit.testing.v1 import AppTest
 
