@@ -273,6 +273,7 @@ def build_investment_memo_pdf(
 
 def _arabic_font_path() -> Path:
     candidates = [
+        Path(__file__).resolve().parents[2] / "assets" / "fonts" / "DejaVuSans.ttf",
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
         Path("/usr/share/fonts/dejavu/DejaVuSans.ttf"),
         Path("C:/Windows/Fonts/tahoma.ttf"),
