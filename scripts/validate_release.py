@@ -18,6 +18,8 @@ PYTHON_FILES = [
     ROOT / "src" / "real_estate_intel" / "analytics.py",
     ROOT / "src" / "real_estate_intel" / "catalog.py",
     ROOT / "src" / "real_estate_intel" / "data_engine.py",
+    ROOT / "src" / "real_estate_intel" / "decision_support.py",
+    ROOT / "src" / "real_estate_intel" / "forecasting.py",
     ROOT / "src" / "real_estate_intel" / "official_sources.py",
     ROOT / "src" / "real_estate_intel" / "data_prep.py",
     ROOT / "src" / "real_estate_intel" / "rega_client.py",
