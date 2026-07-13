@@ -3395,7 +3395,7 @@ def render_property_valuation_engine(
             )
         except (ImportError, ModuleNotFoundError, RuntimeError) as exc:
             memo_pdf = b""
-            print(f"PDF report unavailable; HTML fallback enabled: {type(exc).__name__}")
+            print(f"PDF report unavailable; HTML fallback enabled: {type(exc).__name__}: {exc}")
 
         if memo_pdf:
             pdf_col, html_col = st.columns(2)
