@@ -9,10 +9,16 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from real_estate_intel.reporting import build_investment_memo_html, build_investment_memo_pdf
+from real_estate_intel.reporting import _arabic_font_path, build_investment_memo_html, build_investment_memo_pdf
 
 
 class ReportingTests(unittest.TestCase):
+    def test_pdf_uses_the_bundled_arabic_font(self) -> None:
+        font_path = _arabic_font_path()
+        self.assertEqual(font_path.name, "DejaVuSans.ttf")
+        self.assertIn("assets", font_path.parts)
+        self.assertTrue(font_path.is_file())
+
     def test_memo_contains_decision_metrics_and_scenarios(self) -> None:
         html = build_investment_memo_html(
             property_details={"city": "الرياض", "district": "النرجس", "property_type": "شقة", "area": 150, "price": 900_000},
