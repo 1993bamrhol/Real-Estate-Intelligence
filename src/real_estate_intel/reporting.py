@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from html import escape
+from io import BytesIO
+from pathlib import Path
 from typing import Mapping
 
 
@@ -12,6 +14,8 @@ def build_investment_memo_html(
     analysis: Mapping[str, object],
     stress_test: Mapping[str, object],
     market_context: Mapping[str, object],
+    forecast: Mapping[str, object] | None = None,
+    alternatives: object | None = None,
 ) -> str:
     decision_labels = {"buy": "شراء", "negotiate": "تفاوض", "reject": "رفض"}
     confidence_labels = {"high": "عالية", "medium": "متوسطة", "low": "منخفضة"}
@@ -89,6 +93,195 @@ th {{ background: #eef4f1; }}
 
 <p class="note">هذه المذكرة أداة دعم قرار وليست تقييمًا عقاريًا معتمدًا أو توصية مالية نهائية. يجب التحقق من حالة العقار، الملكية، التمويل، والمصاريف الفعلية قبل الشراء.</p>
 </main></body></html>"""
+
+
+def build_investment_memo_pdf(
+    *,
+    property_details: Mapping[str, object],
+    assumptions: Mapping[str, object],
+    analysis: Mapping[str, object],
+    stress_test: Mapping[str, object],
+    market_context: Mapping[str, object],
+    forecast: Mapping[str, object] | None = None,
+    alternatives: object | None = None,
+) -> bytes:
+    """Build a shareable Arabic PDF decision memo."""
+    import arabic_reshaper
+    import pandas as pd
+    from bidi.algorithm import get_display
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_RIGHT
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    font_path = _arabic_font_path()
+    font_name = "ArabicMemoFont"
+    if font_name not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont(font_name, str(font_path)))
+
+    def rtl(value: object) -> str:
+        return get_display(arabic_reshaper.reshape(str(value or "-")))
+
+    buffer = BytesIO()
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=16 * mm,
+        leftMargin=16 * mm,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
+        title="Investment Decision Memo",
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "ArabicTitle",
+        parent=styles["Title"],
+        fontName=font_name,
+        fontSize=20,
+        leading=28,
+        alignment=TA_RIGHT,
+        textColor=colors.HexColor("#0b6b53"),
+    )
+    heading_style = ParagraphStyle(
+        "ArabicHeading",
+        parent=styles["Heading2"],
+        fontName=font_name,
+        fontSize=13,
+        leading=19,
+        alignment=TA_RIGHT,
+        textColor=colors.HexColor("#0b6b53"),
+        spaceBefore=8,
+        spaceAfter=6,
+    )
+    body_style = ParagraphStyle(
+        "ArabicBody",
+        parent=styles["BodyText"],
+        fontName=font_name,
+        fontSize=9,
+        leading=15,
+        alignment=TA_RIGHT,
+    )
+    story: list[object] = [Paragraph(rtl("مذكرة قرار استثماري للعقار"), title_style)]
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    story.append(Paragraph(rtl(f"تاريخ الإنشاء: {generated_at}"), body_style))
+    story.append(Spacer(1, 5 * mm))
+
+    decision_labels = {"buy": "شراء", "negotiate": "تفاوض", "reject": "رفض"}
+    confidence_labels = {"high": "عالية", "medium": "متوسطة", "low": "منخفضة"}
+    decision = decision_labels.get(str(analysis.get("decision", "")), "غير محدد")
+    confidence = confidence_labels.get(str(stress_test.get("confidence", "")), "منخفضة")
+    story.append(
+        Paragraph(
+            rtl(f"القرار: {decision} | درجة الصفقة {_number(analysis.get('deal_score'), 1)}/100 | الثقة {confidence}"),
+            heading_style,
+        )
+    )
+
+    def add_table(title: str, rows: list[list[object]], widths: list[float] | None = None) -> None:
+        story.append(Paragraph(rtl(title), heading_style))
+        shaped = [[Paragraph(rtl(cell), body_style) for cell in row] for row in rows]
+        table = Table(shaped, colWidths=widths, hAlign="RIGHT", repeatRows=1)
+        table.setStyle(
+            TableStyle(
+                [
+                    ("FONTNAME", (0, 0), (-1, -1), font_name),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e5f2ee")),
+                    ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#b7c9c1")),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 7),
+                    ("TOPPADDING", (0, 0), (-1, -1), 6),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ]
+            )
+        )
+        story.append(table)
+
+    add_table(
+        "بيانات العقار",
+        [
+            ["القيمة", "البيان"],
+            [property_details.get("city"), "المدينة"],
+            [property_details.get("district"), "الحي"],
+            [property_details.get("property_type"), "نوع العقار"],
+            [f"{_number(property_details.get('area'), 0)} م²", "المساحة"],
+            [_money(property_details.get("price")), "السعر المطلوب"],
+            [market_context.get("period", "-"), "الفترة السوقية"],
+        ],
+        [95 * mm, 65 * mm],
+    )
+    add_table(
+        "مؤشرات القرار",
+        [
+            ["القيمة", "المؤشر"],
+            [f"{_number(analysis.get('net_yield_pct'), 2)}%", "العائد الصافي"],
+            [_money(analysis.get("annual_cash_flow")), "التدفق النقدي السنوي"],
+            [f"{_number(analysis.get('cash_on_cash_pct'), 2)}%", "العائد على النقد"],
+            [_ratio(analysis.get("dscr")), "تغطية القسط DSCR"],
+            [_money(stress_test.get("risk_adjusted_max_offer")), "أقصى سعر شراء آمن"],
+            [f"{_number(analysis.get('break_even_occupancy_pct'), 1)}%", "إشغال التعادل"],
+        ],
+        [95 * mm, 65 * mm],
+    )
+
+    if forecast and forecast.get("ready"):
+        forecast_confidence = confidence_labels.get(str(forecast.get("confidence")), "منخفضة")
+        add_table(
+            "توقع سنة مقبلة",
+            [
+                ["القيمة", "المؤشر"],
+                [forecast.get("target_period", "-"), "فترة التوقع"],
+                [_money(forecast.get("forecast_rent")), "الإيجار المتوقع - محايد"],
+                [f"{_number(forecast.get('rent_change_pct'), 1)}%", "تغير الإيجار المتوقع"],
+                [f"{_number(forecast.get('demand_change_pct'), 1)}%", "تغير الطلب المتوقع"],
+                [forecast_confidence, "ثقة التوقع"],
+            ],
+            [95 * mm, 65 * mm],
+        )
+
+    alternative_frame = alternatives if isinstance(alternatives, pd.DataFrame) else pd.DataFrame()
+    if not alternative_frame.empty:
+        rows = [["السبب", "المخاطرة", "العائد", "الحي"]]
+        for _, row in alternative_frame.head(3).iterrows():
+            rows.append(
+                [
+                    row.get("why_ar", "-"),
+                    f"{_number(row.get('risk_score'), 0)}/100",
+                    f"{_number(row.get('gross_yield_pct'), 2)}%",
+                    row.get("neighborhood", "-"),
+                ]
+            )
+        add_table("أفضل البدائل", rows, [60 * mm, 30 * mm, 30 * mm, 40 * mm])
+
+    story.append(Spacer(1, 5 * mm))
+    story.append(
+        Paragraph(
+            rtl(
+                "هذه المذكرة أداة دعم قرار وليست تقييمًا عقاريًا معتمدًا أو ضمانًا للتوقع. "
+                "تحقق من حالة العقار والملكية والتمويل والمصاريف الفعلية قبل الشراء."
+            ),
+            body_style,
+        )
+    )
+    document.build(story)
+    return buffer.getvalue()
+
+
+def _arabic_font_path() -> Path:
+    candidates = [
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/usr/share/fonts/dejavu/DejaVuSans.ttf"),
+        Path("C:/Windows/Fonts/tahoma.ttf"),
+        Path("C:/Windows/Fonts/arial.ttf"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise RuntimeError("No Arabic-capable TrueType font was found for PDF generation.")
 
 
 def _text(value: object) -> str:

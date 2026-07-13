@@ -39,13 +39,15 @@ from real_estate_intel.analytics import (
 from real_estate_intel.catalog import REGA_OPEN_DATA_PAGE
 from real_estate_intel.data_engine import load_market_data, load_sale_market_data, warehouse_status
 from real_estate_intel.data_prep import load_rental_data, location_label
+from real_estate_intel.decision_support import rank_alternatives
+from real_estate_intel.forecasting import forecast_market
 from real_estate_intel.official_sources import (
     metric_lineage_frame,
     official_limitations,
     official_source_summary,
     official_sources_frame,
 )
-from real_estate_intel.reporting import build_investment_memo_html
+from real_estate_intel.reporting import build_investment_memo_html, build_investment_memo_pdf
 from real_estate_intel.sales import latest_sale_comparable
 from real_estate_intel.underwriting import PropertyAssumptions, analyze_property, stress_test_property
 
@@ -2522,7 +2524,7 @@ def render_riyadh_first_page(
     render_riyadh_decision_platform(riyadh, decision_scores, settings)
 
     st.divider()
-    render_property_valuation_engine(riyadh, sale_data)
+    render_property_valuation_engine(riyadh, sale_data, decision_scores)
 
 
 def riyadh_focus_data(data: pd.DataFrame) -> pd.DataFrame:
@@ -3148,7 +3150,11 @@ def render_riyadh_neighborhood_comparison(market: pd.DataFrame) -> None:
     render_chart(fig)
 
 
-def render_property_valuation_engine(riyadh: pd.DataFrame, sale_data: pd.DataFrame) -> None:
+def render_property_valuation_engine(
+    riyadh: pd.DataFrame,
+    sale_data: pd.DataFrame,
+    decision_scores: pd.DataFrame,
+) -> None:
     st.subheader("محرك تقييم عقار سريع")
     st.caption("أدخل السعر والمساحة والحي ونوع العقار. المحلل يربط السعر بمؤشرات الإيجار والطلب في الحي، مع بقاء فرق السعر عن متوسط الحي مدخلًا يدويًا إذا كان متاحًا لديك.")
 
@@ -3214,6 +3220,15 @@ def render_property_valuation_engine(riyadh: pd.DataFrame, sale_data: pd.DataFra
             )
 
     market = district_market_snapshot(riyadh, district, property_type)
+    forecast_scope = district_rows(riyadh, district)
+    forecast_scope = forecast_scope[forecast_scope["property_type"].eq(property_type)].copy()
+    market_forecast = forecast_market(forecast_scope)
+    alternatives = rank_alternatives(
+        decision_scores,
+        selected_neighborhood=district,
+        property_type=property_type,
+        purchase_price=float(price),
+    )
     sale_comparable = latest_sale_comparable(
         sale_data,
         city="الرياض",
@@ -3359,9 +3374,36 @@ def render_property_valuation_engine(riyadh: pd.DataFrame, sale_data: pd.DataFra
             analysis=underwriting,
             stress_test=stress_test,
             market_context=market,
+            forecast=market_forecast,
+            alternatives=alternatives,
         )
-        st.download_button(
-            "تنزيل مذكرة القرار الاستثماري",
+        memo_pdf = build_investment_memo_pdf(
+            property_details={
+                "city": "الرياض",
+                "district": district,
+                "property_type": property_type,
+                "area": area,
+                "price": price,
+            },
+            assumptions=assumptions.__dict__,
+            analysis=underwriting,
+            stress_test=stress_test,
+            market_context=market,
+            forecast=market_forecast,
+            alternatives=alternatives,
+        )
+        pdf_col, html_col = st.columns(2)
+        pdf_col.download_button(
+            "تحميل تقرير PDF",
+            data=memo_pdf,
+            file_name="investment-decision-report.pdf",
+            mime="application/pdf",
+            key="download_investment_pdf",
+            width="stretch",
+            type="primary",
+        )
+        html_col.download_button(
+            "تحميل نسخة HTML",
             data=memo_html.encode("utf-8-sig"),
             file_name="investment-decision-memo.html",
             mime="text/html",
@@ -3380,6 +3422,129 @@ def render_property_valuation_engine(riyadh: pd.DataFrame, sale_data: pd.DataFra
         st.markdown("**رأي المحلل العقاري**")
         st.write(real_estate_analyst_opinion(district, property_type, result, market))
         st.caption(district_rental_context(riyadh, district, property_type))
+
+    render_market_forecast(market_forecast, district, property_type)
+    render_investment_alternatives(alternatives, district, property_type)
+
+
+def render_market_forecast(forecast: dict[str, object], district: str, property_type: str) -> None:
+    st.divider()
+    st.subheader("توقع الإيجار والطلب خلال سنة")
+    if not forecast.get("ready"):
+        st.info(str(forecast.get("reason", "لا يتوفر تاريخ كافٍ لبناء توقع.")))
+        return
+
+    confidence_labels = {"high": "عالية", "medium": "متوسطة", "low": "منخفضة"}
+    metrics = st.columns(3)
+    metrics[0].metric(
+        "الإيجار المتوقع - محايد",
+        format_sar(float(forecast["forecast_rent"])),
+        f"{float(forecast['rent_change_pct']):+.1f}% خلال سنة",
+    )
+    metrics[1].metric(
+        "الطلب المتوقع - محايد",
+        f"{float(forecast['forecast_demand']):,.0f} عقد",
+        f"{float(forecast['demand_change_pct']):+.1f}% خلال سنة",
+    )
+    metrics[2].metric(
+        "ثقة التوقع",
+        confidence_labels.get(str(forecast.get("confidence")), "منخفضة"),
+        f"{int(forecast.get('periods_used', 0))} أرباع تاريخية",
+    )
+
+    history = forecast["history"].tail(8).copy()
+    history["scenario_ar"] = "فعلي"
+    projected = forecast["forecast"].copy()
+    chart_data = pd.concat(
+        [
+            history[["period_index", "period", "average_rent", "scenario_ar"]],
+            projected[["period_index", "period", "average_rent", "scenario_ar"]],
+        ],
+        ignore_index=True,
+    )
+    fig = px.line(
+        chart_data,
+        x="period",
+        y="average_rent",
+        color="scenario_ar",
+        markers=True,
+        labels={"period": "الفترة", "average_rent": "متوسط الإيجار (ر.س)", "scenario_ar": "المسار"},
+        title=f"المسارات المتوقعة: {district} | {property_type}",
+        category_orders={"scenario_ar": ["فعلي", "متشائم", "محايد", "متفائل"]},
+        color_discrete_map={"فعلي": "#17211f", "متشائم": "#b84a4a", "محايد": "#1c5d99", "متفائل": "#0b6b53"},
+    )
+    fig.update_layout(legend_title_text="", hovermode="x unified")
+    fig.update_yaxes(tickformat=",.0f")
+    render_chart(fig)
+
+    target_index = projected["period_index"].max()
+    scenario_view = projected[projected["period_index"].eq(target_index)].copy()
+    scenario_view = scenario_view.rename(
+        columns={
+            "scenario_ar": "السيناريو",
+            "period": "الفترة",
+            "average_rent": "الإيجار المتوقع",
+            "total_deals": "الطلب المتوقع",
+            "rent_quarterly_rate_pct": "اتجاه الإيجار الربعي %",
+        }
+    )
+    st.dataframe(
+        scenario_view[["السيناريو", "الفترة", "الإيجار المتوقع", "الطلب المتوقع", "اتجاه الإيجار الربعي %"]].style.format(
+            {"الإيجار المتوقع": "{:,.0f}", "الطلب المتوقع": "{:,.0f}", "اتجاه الإيجار الربعي %": "{:+.2f}"}
+        ),
+        hide_index=True,
+        width="stretch",
+    )
+    st.caption(
+        f"المنهج: {forecast['method_ar']} هذه توقعات إحصائية وليست ضمانًا؛ "
+        "قد تتغير مع التمويل والتنظيم والعرض الجديد والأحداث الاقتصادية."
+    )
+
+
+def render_investment_alternatives(
+    alternatives: pd.DataFrame,
+    district: str,
+    property_type: str,
+) -> None:
+    st.divider()
+    st.subheader("هل توجد أحياء أفضل؟")
+    st.caption(
+        f"مقارنة {district} بثلاثة بدائل لنوع {property_type} وبنفس سعر الشراء المدخل، "
+        "مع موازنة العائد والسيولة وانخفاض المخاطرة."
+    )
+    if alternatives.empty:
+        st.info("لا توجد بدائل موثوقة كافية لنفس نوع العقار ضمن أحدث فترة.")
+        return
+
+    view = alternatives.rename(
+        columns={
+            "neighborhood": "الحي البديل",
+            "average_rent": "متوسط الإيجار",
+            "total_deals": "العقود",
+            "gross_yield_pct": "العائد التقريبي %",
+            "risk_score": "درجة الأمان",
+            "yield_advantage_pct": "فرق العائد %",
+            "why_ar": "سبب الترشيح",
+        }
+    )
+    st.dataframe(
+        view[["الحي البديل", "متوسط الإيجار", "العقود", "العائد التقريبي %", "درجة الأمان", "فرق العائد %", "سبب الترشيح"]].style.format(
+            {
+                "متوسط الإيجار": "{:,.0f}",
+                "العقود": "{:,.0f}",
+                "العائد التقريبي %": "{:.2f}",
+                "درجة الأمان": "{:.0f}/100",
+                "فرق العائد %": "{:+.2f}",
+            }
+        ),
+        hide_index=True,
+        width="stretch",
+    )
+    best = alternatives.iloc[0]
+    st.info(
+        f"أقوى بديل حاليًا: {best['neighborhood']} — {best['why_ar']}. "
+        "استخدمه كمرشح للمقارنة الميدانية، وليس كقرار شراء تلقائي."
+    )
 
 
 def neighborhood_property_type_options(riyadh: pd.DataFrame, district: str) -> list[str]:
