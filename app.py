@@ -3377,39 +3377,55 @@ def render_property_valuation_engine(
             forecast=market_forecast,
             alternatives=alternatives,
         )
-        memo_pdf = build_investment_memo_pdf(
-            property_details={
-                "city": "الرياض",
-                "district": district,
-                "property_type": property_type,
-                "area": area,
-                "price": price,
-            },
-            assumptions=assumptions.__dict__,
-            analysis=underwriting,
-            stress_test=stress_test,
-            market_context=market,
-            forecast=market_forecast,
-            alternatives=alternatives,
-        )
-        pdf_col, html_col = st.columns(2)
-        pdf_col.download_button(
-            "تحميل تقرير PDF",
-            data=memo_pdf,
-            file_name="investment-decision-report.pdf",
-            mime="application/pdf",
-            key="download_investment_pdf",
-            width="stretch",
-            type="primary",
-        )
-        html_col.download_button(
-            "تحميل نسخة HTML",
-            data=memo_html.encode("utf-8-sig"),
-            file_name="investment-decision-memo.html",
-            mime="text/html",
-            key="download_investment_memo",
-            width="stretch",
-        )
+        try:
+            memo_pdf = build_investment_memo_pdf(
+                property_details={
+                    "city": "الرياض",
+                    "district": district,
+                    "property_type": property_type,
+                    "area": area,
+                    "price": price,
+                },
+                assumptions=assumptions.__dict__,
+                analysis=underwriting,
+                stress_test=stress_test,
+                market_context=market,
+                forecast=market_forecast,
+                alternatives=alternatives,
+            )
+        except (ImportError, ModuleNotFoundError, RuntimeError) as exc:
+            memo_pdf = b""
+            print(f"PDF report unavailable; HTML fallback enabled: {type(exc).__name__}")
+
+        if memo_pdf:
+            pdf_col, html_col = st.columns(2)
+            pdf_col.download_button(
+                "تحميل تقرير PDF",
+                data=memo_pdf,
+                file_name="investment-decision-report.pdf",
+                mime="application/pdf",
+                key="download_investment_pdf",
+                width="stretch",
+                type="primary",
+            )
+            html_col.download_button(
+                "تحميل نسخة HTML",
+                data=memo_html.encode("utf-8-sig"),
+                file_name="investment-decision-memo.html",
+                mime="text/html",
+                key="download_investment_memo",
+                width="stretch",
+            )
+        else:
+            st.warning("تقرير PDF غير متاح مؤقتًا؛ يمكنك تحميل نسخة HTML حتى تكتمل مكتبات PDF.")
+            st.download_button(
+                "تحميل نسخة HTML",
+                data=memo_html.encode("utf-8-sig"),
+                file_name="investment-decision-memo.html",
+                mime="text/html",
+                key="download_investment_memo_fallback",
+                width="stretch",
+            )
 
         status, message = valuation_message(float(market_gap_pct), result["negotiation_to_fair"], result, market)
         if status == "good":
