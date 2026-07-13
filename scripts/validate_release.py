@@ -12,6 +12,7 @@ if str(SRC) not in sys.path:
 PYTHON_FILES = [
     ROOT / "app.py",
     ROOT / "scripts" / "fetch_rega_data.py",
+    ROOT / "scripts" / "fetch_sale_indicators.py",
     ROOT / "scripts" / "build_data_snapshot.py",
     ROOT / "scripts" / "check_data_freshness.py",
     ROOT / "src" / "real_estate_intel" / "analytics.py",
@@ -22,6 +23,7 @@ PYTHON_FILES = [
     ROOT / "src" / "real_estate_intel" / "rega_client.py",
     ROOT / "src" / "real_estate_intel" / "reporting.py",
     ROOT / "src" / "real_estate_intel" / "underwriting.py",
+    ROOT / "src" / "real_estate_intel" / "sales.py",
 ]
 
 
@@ -30,6 +32,7 @@ def main() -> None:
         py_compile.compile(str(path), doraise=True)
 
     from real_estate_intel.data_prep import load_rental_data
+    from real_estate_intel.sales import load_sale_snapshot
 
     data = load_rental_data()
     if data.empty:
@@ -40,6 +43,15 @@ def main() -> None:
         raise SystemExit(f"Validation failed: missing columns {sorted(missing)}.")
     if data["region_ar"].nunique() < 5:
         raise SystemExit("Validation failed: market coverage is too narrow.")
+
+    sales = load_sale_snapshot()
+    if sales.empty:
+        raise SystemExit("Validation failed: no official sale indicators loaded.")
+    sale_key = ["city_ar", "geography_level", "location_ar", "property_type", "period_index"]
+    if sales.duplicated(sale_key).any():
+        raise SystemExit("Validation failed: duplicate sale-indicator grain.")
+    if sales["average_price_per_sqm"].le(0).any():
+        raise SystemExit("Validation failed: invalid sale price per sqm.")
 
     from check_data_freshness import validate_freshness
 
@@ -58,6 +70,8 @@ def main() -> None:
     print(f"regions={data['region_ar'].nunique():,}")
     print(f"locations={data['location_ar'].nunique():,}")
     print(f"latest_period={data.loc[data['period_index'].idxmax(), 'period']}")
+    print(f"sale_rows={len(sales):,}")
+    print(f"sale_latest_period={sales.loc[sales['period_index'].idxmax(), 'period']}")
 
 
 if __name__ == "__main__":

@@ -37,7 +37,7 @@ from real_estate_intel.analytics import (
     weighted_average,
 )
 from real_estate_intel.catalog import REGA_OPEN_DATA_PAGE
-from real_estate_intel.data_engine import load_market_data, warehouse_status
+from real_estate_intel.data_engine import load_market_data, load_sale_market_data, warehouse_status
 from real_estate_intel.data_prep import load_rental_data, location_label
 from real_estate_intel.official_sources import (
     metric_lineage_frame,
@@ -46,6 +46,7 @@ from real_estate_intel.official_sources import (
     official_sources_frame,
 )
 from real_estate_intel.reporting import build_investment_memo_html
+from real_estate_intel.sales import latest_sale_comparable
 from real_estate_intel.underwriting import PropertyAssumptions, analyze_property, stress_test_property
 
 st.set_page_config(page_title="Real Estate Intelligence", layout="wide")
@@ -413,9 +414,17 @@ def get_data(_warehouse_version: str) -> pd.DataFrame:
     return ensure_app_columns(load_market_data())
 
 
+@st.cache_data(show_spinner="Loading official sale indicators...")
+def get_sale_data(_warehouse_version: str) -> pd.DataFrame:
+    return load_sale_market_data()
+
+
 def get_warehouse_version_string() -> str:
     status = warehouse_status()
-    return f"{status.get('type')}-{status.get('rows')}-{status.get('latest_period')}"
+    return (
+        f"{status.get('type')}-{status.get('rows')}-{status.get('latest_period')}-"
+        f"{status.get('sale_rows')}-{status.get('sale_latest_period')}"
+    )
 
 
 def ensure_app_columns(data: pd.DataFrame) -> pd.DataFrame:
@@ -1910,10 +1919,67 @@ def render_data_engine_status() -> None:
             cols[2].metric("المواقع", f"{safe_float(status.get('locations', 0)):,.0f}")
             cols[3].metric("آخر فترة", str(status.get("latest_period", "-")))
             cols[4].metric("المصادر الرسمية", f"{safe_float(status.get('official_sources', 0)):,.0f}")
+            if safe_float(status.get("sale_rows", 0)) > 0:
+                sale_cols = st.columns(3)
+                sale_cols[0].metric("مؤشرات البيع", f"{safe_float(status.get('sale_rows', 0)):,.0f}")
+                sale_cols[1].metric("أحياء البيع", f"{safe_float(status.get('sale_districts', 0)):,.0f}")
+                sale_cols[2].metric("آخر بيع رسمي", str(status.get("sale_latest_period", "-")))
+                st.caption("تغطية البيع الحالية محدودة بما تنشره صفحة المؤشرات العامة، ونوع العقار المتاح حاليًا أرض سكنية.")
             st.caption(f"المسار المحلي: {status.get('path')}")
         else:
             st.warning("لم يتم إنشاء قاعدة البيانات المحلية بعد. سيستخدم التطبيق البيانات المعالجة كمسار احتياطي.")
             st.caption(f"المسار المتوقع: {status.get('path')}")
+
+
+def render_sale_indicator_coverage(sales: pd.DataFrame) -> None:
+    with st.container(border=True):
+        st.subheader("مؤشرات البيع الرسمية")
+        if sales.empty:
+            st.warning("لا توجد لقطة بيع رسمية متاحة حاليًا؛ لم تُستخدم أي أسعار بيع في التقييم.")
+            return
+
+        latest_index = int(sales["period_index"].max())
+        latest = sales[
+            sales["period_index"].eq(latest_index)
+            & sales["geography_level"].eq("district")
+        ].copy()
+        period = str(sales.loc[sales["period_index"].idxmax(), "period"])
+        metrics = st.columns(4)
+        metrics[0].metric("آخر فترة", period)
+        metrics[1].metric(
+            "الأحياء المتاحة",
+            f"{sales.loc[sales['geography_level'].eq('district'), 'district_ar'].nunique():,.0f}",
+        )
+        metrics[2].metric("أنواع العقار", f"{sales['property_type'].nunique():,.0f}")
+        metrics[3].metric("السجلات الفصلية", f"{len(sales):,.0f}")
+        st.caption(
+            "المصدر: منصة المؤشرات العقارية للهيئة العامة للعقار. "
+            "المؤشرات العامة المستخرجة حاليًا تغطي أرضًا سكنية وثلاثة أحياء فقط؛ تفاصيل أوسع تتطلب دخول نفاذ."
+        )
+
+        if not latest.empty:
+            latest = latest.sort_values("average_price_per_sqm", ascending=False)
+            fig = px.bar(
+                latest,
+                x="location_ar",
+                y="average_price_per_sqm",
+                color="property_type",
+                text="deed_count",
+                labels={
+                    "location_ar": "الحي",
+                    "average_price_per_sqm": "متوسط سعر المتر (ر.س)",
+                    "property_type": "نوع العقار",
+                    "deed_count": "عدد الصفقات",
+                },
+                title=f"متوسط سعر المتر الرسمي حسب الحي — {period}",
+            )
+            fig.update_traces(texttemplate="%{text:,.0f} صفقة", textposition="outside")
+            fig.update_layout(showlegend=False)
+            render_chart(fig)
+
+        source_urls = sales["source_url"].dropna().astype(str)
+        if not source_urls.empty and source_urls.iloc[0]:
+            st.link_button("فتح المصدر الرسمي", source_urls.iloc[0])
 
 
 def render_official_sources_status(data: pd.DataFrame) -> None:
@@ -2328,7 +2394,9 @@ def scope_narrative(data: pd.DataFrame) -> str:
 
 
 def main() -> None:
-    data = get_data(get_warehouse_version_string())
+    warehouse_version = get_warehouse_version_string()
+    data = get_data(warehouse_version)
+    sale_data = get_sale_data(warehouse_version)
     render_digital_header(data)
 
     if data.empty:
@@ -2346,7 +2414,7 @@ def main() -> None:
     )
 
     with decision_tab:
-        render_riyadh_first_page(data, settings)
+        render_riyadh_first_page(data, settings, sale_data)
 
     with analyst_tab:
         render_ai_briefing(filtered, settings, snapshot)
@@ -2364,6 +2432,7 @@ def main() -> None:
 
     with data_tab:
         render_data_engine_status()
+        render_sale_indicator_coverage(sale_data)
         render_official_sources_status(data)
         render_market_coverage(data, filtered)
         render_data_quality(filtered)
@@ -2437,7 +2506,11 @@ def render_filters(data: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, object]]
     return filtered, settings
 
 
-def render_riyadh_first_page(data: pd.DataFrame, settings: dict[str, object]) -> None:
+def render_riyadh_first_page(
+    data: pd.DataFrame,
+    settings: dict[str, object],
+    sale_data: pd.DataFrame,
+) -> None:
     riyadh = riyadh_focus_data(data)
     if riyadh.empty:
         return
@@ -2449,7 +2522,7 @@ def render_riyadh_first_page(data: pd.DataFrame, settings: dict[str, object]) ->
     render_riyadh_decision_platform(riyadh, decision_scores, settings)
 
     st.divider()
-    render_property_valuation_engine(riyadh)
+    render_property_valuation_engine(riyadh, sale_data)
 
 
 def riyadh_focus_data(data: pd.DataFrame) -> pd.DataFrame:
@@ -3075,7 +3148,7 @@ def render_riyadh_neighborhood_comparison(market: pd.DataFrame) -> None:
     render_chart(fig)
 
 
-def render_property_valuation_engine(riyadh: pd.DataFrame) -> None:
+def render_property_valuation_engine(riyadh: pd.DataFrame, sale_data: pd.DataFrame) -> None:
     st.subheader("محرك تقييم عقار سريع")
     st.caption("أدخل السعر والمساحة والحي ونوع العقار. المحلل يربط السعر بمؤشرات الإيجار والطلب في الحي، مع بقاء فرق السعر عن متوسط الحي مدخلًا يدويًا إذا كان متاحًا لديك.")
 
@@ -3141,7 +3214,23 @@ def render_property_valuation_engine(riyadh: pd.DataFrame) -> None:
             )
 
     market = district_market_snapshot(riyadh, district, property_type)
-    result = evaluate_property_price(float(price), float(area), float(market_gap_pct), market)
+    sale_comparable = latest_sale_comparable(
+        sale_data,
+        city="الرياض",
+        district=district,
+        property_type=property_type,
+        area=float(area),
+    )
+    official_fair_price = (
+        float(sale_comparable["estimated_sale_value"]) if sale_comparable is not None else None
+    )
+    result = evaluate_property_price(
+        float(price),
+        float(area),
+        float(market_gap_pct),
+        market,
+        official_fair_price=official_fair_price,
+    )
     assumptions = PropertyAssumptions(
             purchase_price=float(price),
             annual_rent=safe_float(market.get("average_rent", 0)),
@@ -3166,10 +3255,31 @@ def render_property_valuation_engine(riyadh: pd.DataFrame) -> None:
         st.metric("العقود في آخر فترة", f"{market['total_deals']:,.0f}", market["period"])
 
         st.metric(
-            "فارق السعر عن متوسط الحي",
+            "فارق السعر عن المرجع الرسمي" if sale_comparable is not None else "فارق السعر عن متوسط الحي",
             format_sar(result["premium_amount"]),
-            f"{market_gap_pct:+.1f}%",
+            (
+                f"{pct_delta(float(price), float(sale_comparable['estimated_sale_value'])):+.1f}%"
+                if sale_comparable is not None
+                else f"{market_gap_pct:+.1f}%"
+            ),
         )
+
+        if sale_comparable is not None:
+            st.success(
+                "مرجع بيع رسمي مطابق: "
+                f"{sale_comparable['average_price_per_sqm']:,.0f} ر.س/م² | "
+                f"{sale_comparable['deed_count']:,.0f} صفقة | {sale_comparable['period']}"
+            )
+            st.caption(
+                f"نوع المؤشر: {sale_comparable['property_type']}. استُخدم في القيمة العادلة لأن الحي والنوع متطابقان."
+            )
+        elif not sale_data.empty:
+            latest_sale_period = sale_data.loc[sale_data["period_index"].idxmax(), "period"]
+            st.info(
+                "توجد مؤشرات بيع رسمية حتى "
+                f"{latest_sale_period}، لكن لا يوجد تطابق آمن لهذا الحي ونوع العقار. "
+                "التغطية الحالية للأراضي السكنية فقط، لذلك لم تدخل في التقييم."
+            )
 
         st.markdown("### قرار الاستثمار للعقار")
         decision_labels = {"buy": "شراء", "negotiate": "تفاوض", "reject": "رفض"}
@@ -3340,10 +3450,16 @@ def evaluate_property_price(
     area: float,
     market_gap_pct: float,
     market: dict[str, object],
+    official_fair_price: float | None = None,
 ) -> dict[str, float]:
     area = max(area, 1)
     market_multiplier = 1 + (market_gap_pct / 100)
-    estimated_market_price = price / market_multiplier if market_multiplier > 0 else price
+    manual_market_price = price / market_multiplier if market_multiplier > 0 else price
+    estimated_market_price = (
+        float(official_fair_price)
+        if official_fair_price is not None and float(official_fair_price) > 0
+        else manual_market_price
+    )
     premium_amount = price - estimated_market_price
     acceptable_price = estimated_market_price * 1.03
     annual_rent = safe_float(market.get("average_rent", 0))
