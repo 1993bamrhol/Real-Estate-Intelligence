@@ -9,6 +9,7 @@ OFFICIAL_GASTAT_URL = "https://www.stats.gov.sa/en"
 OFFICIAL_DATASAUDI_URL = "https://datasaudi.sa/en"
 OFFICIAL_RIYADH_OPEN_DATA_URL = "https://www.alriyadh.gov.sa/en/open-data"
 OFFICIAL_RER_URL = "https://rer.sa/"
+OFFICIAL_REGA_INDICATORS_URL = "https://rei.rega.gov.sa/ar"
 
 
 def official_sources_frame() -> pd.DataFrame:
@@ -23,6 +24,18 @@ def official_sources_frame() -> pd.DataFrame:
             "status_ar": "نشط داخل المنتج",
             "coverage_ar": "مؤشرات الإيجار حسب المنطقة والمدينة والحي ونوع العقار والفترة",
             "used_for_ar": "متوسط الإيجار، عدد العقود، النمو، السيولة، مؤشرات الفرص",
+            "trust_score": 95,
+            "active": True,
+        },
+        {
+            "source_id": "rega_sale_indicators",
+            "name_ar": "الهيئة العامة للعقار - المؤشرات العقارية",
+            "owner_ar": "الهيئة العامة للعقار / وزارة العدل / السجل العقاري",
+            "url": OFFICIAL_REGA_INDICATORS_URL,
+            "access_ar": "مجاني / مؤشرات عامة",
+            "status_ar": "نشط بتغطية محدودة داخل المنتج",
+            "coverage_ar": "متوسط سعر المتر وعدد الصفقات حسب المدينة والحي والنوع والفترة المتاحة علنًا",
+            "used_for_ar": "مرجع سعر البيع عند التطابق الصريح للحي ونوع العقار فقط",
             "trust_score": 95,
             "active": True,
         },
@@ -143,11 +156,11 @@ def metric_lineage_frame() -> pd.DataFrame:
         },
         {
             "indicator_ar": "تقييم سعر شراء محدد",
-            "source_ar": "يتطلب صفقات بيع رسمية وبيانات مساحة",
-            "confidence_ar": "غير مفعل حاليا",
-            "method_ar": "يجب مقارنته بسعر متر وصفقات بيع مماثلة عند توفرها",
+            "source_ar": "مؤشرات البيع الرسمية من الهيئة العامة للعقار + بيانات الإيجار",
+            "confidence_ar": "متوسط عند التطابق، ومنخفض عند غياب المقارنة",
+            "method_ar": "المساحة × متوسط سعر المتر الرسمي عند تطابق الحي والنوع، مع اختبار الدخل والتمويل",
             "decision_use_ar": "قبول أو رفض سعر صفقة بعينها",
-            "limitation_ar": "لا ينبغي بيعه كتقييم نهائي قبل دمج بيانات البيع",
+            "limitation_ar": "التغطية العامة الحالية محدودة، والتفاصيل الأوسع تتطلب دخول نفاذ؛ لا تُستخدم مقارنة من نوع مختلف",
         },
     ]
     return pd.DataFrame(rows)
@@ -183,7 +196,7 @@ def official_source_summary(data: pd.DataFrame) -> dict[str, object]:
     return {
         "readiness_label": readiness_label,
         "readiness_score": readiness_score,
-        "active_sources": 2,
+        "active_sources": int(official_sources_frame()["active"].sum()),
         "rows": rows,
         "datasets": datasets,
         "locations": locations,
@@ -194,8 +207,8 @@ def official_source_summary(data: pd.DataFrame) -> dict[str, object]:
 
 def official_limitations() -> list[str]:
     return [
-        "المؤشرات الحالية دقيقة لتحليل الإيجارات والعقود، لكنها ليست تقييما نهائيا لسعر البيع.",
-        "تقييم صفقة شراء يحتاج بيانات بيع رسمية، مساحة، سعر متر، عمر العقار، حالة العقار، وموقعه الدقيق.",
+        "مؤشرات البيع الرسمية مفعلة عند تطابق الحي والنوع، لكن التغطية العامة الحالية محدودة وليست تقييما معتمدا.",
+        "التقييم النهائي يحتاج أيضا عمر العقار، حالته، موقعه الدقيق، وخصائص صفقات مماثلة أوسع.",
         "الخريطة الحالية تقارن الأحياء من بيانات الإيجار؛ الدقة الجغرافية الأعلى تحتاج حدود أحياء رسمية قابلة للتحميل.",
         "أي تقرير تجاري يجب أن يذكر المصدر والفترة ونطاق الثقة حتى لا يخلط بين الإشارة الاستثمارية والتقييم الرسمي.",
     ]

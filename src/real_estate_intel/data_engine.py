@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from pathlib import Path
 
 import pandas as pd
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 from real_estate_intel.analytics import aggregate_market, opportunity_scores
 from real_estate_intel.official_sources import metric_lineage_frame, official_sources_frame
+from real_estate_intel.sales import load_sale_snapshot, prepare_sale_market
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -18,6 +22,7 @@ SIGNALS_TABLE = "rental_market_signals"
 QUALITY_TABLE = "data_quality_summary"
 SOURCE_REGISTRY_TABLE = "official_source_registry"
 METRIC_LINEAGE_TABLE = "metric_lineage"
+SALE_TABLE = "sale_market_indicators"
 
 
 def get_db_connection_string() -> str | None:
@@ -25,10 +30,32 @@ def get_db_connection_string() -> str | None:
     Returns a PostgreSQL connection string from environment variables if available.
     Example: "postgresql://user:password@host:port/database"
     """
-    value = os.environ.get("DATABASE_URL", "").strip()
+    value = normalize_database_url(os.environ.get("DATABASE_URL", ""))
+    return value
+
+
+def normalize_database_url(raw_value: str | None) -> str | None:
+    """Accept a raw URL or a commonly pasted DATABASE_URL TOML assignment."""
+    value = str(raw_value or "").strip().lstrip("\ufeff")
+    if not value:
+        return None
+
+    assignment = re.match(r"^DATABASE_URL\s*=\s*(.+)$", value, flags=re.IGNORECASE | re.DOTALL)
+    if assignment:
+        value = assignment.group(1).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        value = value[1:-1].strip()
     if value.startswith("postgres://"):
         value = "postgresql://" + value.removeprefix("postgres://")
-    return value or None
+    if not value.lower().startswith(("postgresql://", "postgresql+psycopg2://")):
+        return None
+    try:
+        parsed = make_url(value)
+    except ArgumentError:
+        return None
+    if parsed.get_backend_name() != "postgresql" or not parsed.host or not parsed.database:
+        return None
+    return value
 
 
 def create_postgres_engine(db_url: str):
@@ -73,11 +100,37 @@ def load_market_data() -> pd.DataFrame:
     return load_local_fallback()
 
 
-def build_pg_warehouse(source: pd.DataFrame, engine) -> None:
+def load_sale_market_data() -> pd.DataFrame:
+    """Load official sale indicators from PostgreSQL, SQLite, or the snapshot."""
+    db_url = get_db_connection_string()
+    if db_url:
+        try:
+            engine = create_postgres_engine(db_url)
+            with engine.connect() as connection:
+                if pd.io.sql.has_table(SALE_TABLE, connection, schema=None):
+                    data = pd.read_sql_query(text(f"select * from {SALE_TABLE}"), connection)
+                    if not data.empty:
+                        return prepare_sale_market(data)
+        except Exception as exc:
+            print(f"PostgreSQL sale indicators unavailable; using fallback: {exc}")
+
+    if WAREHOUSE_PATH.exists():
+        try:
+            with sqlite3.connect(WAREHOUSE_PATH) as connection:
+                data = pd.read_sql_query(f"select * from {SALE_TABLE}", connection)
+            if not data.empty:
+                return prepare_sale_market(data)
+        except (sqlite3.Error, pd.errors.DatabaseError):
+            pass
+    return load_sale_snapshot()
+
+
+def build_pg_warehouse(source: pd.DataFrame, engine, sales_source: pd.DataFrame | None = None) -> None:
     """Builds and populates the PostgreSQL database."""
     clean = prepare_clean_market(source)
     signals = build_market_signals(clean)
-    quality = build_quality_summary(clean)
+    sales = prepare_sale_market(sales_source if sales_source is not None else load_sale_snapshot())
+    quality = build_quality_summary(clean, sales)
     source_registry = official_sources_frame()
     metric_lineage = metric_lineage_frame()
 
@@ -89,16 +142,23 @@ def build_pg_warehouse(source: pd.DataFrame, engine) -> None:
             quality.to_sql(QUALITY_TABLE, connection, if_exists="replace", index=False, method="multi")
             source_registry.to_sql(SOURCE_REGISTRY_TABLE, connection, if_exists="replace", index=False, method="multi")
             metric_lineage.to_sql(METRIC_LINEAGE_TABLE, connection, if_exists="replace", index=False, method="multi")
+            sales.to_sql(SALE_TABLE, connection, if_exists="replace", index=False, method="multi")
             connection.execute(text(f"create index if not exists idx_clean_period_city on {CLEAN_TABLE}(period_index, city_ar)"))
             connection.execute(text(f"create index if not exists idx_clean_location on {CLEAN_TABLE}(location_ar)"))
             connection.execute(text(f"create index if not exists idx_signals_entity on {SIGNALS_TABLE}(location_ar, property_type)"))
+            connection.execute(text(f"create index if not exists idx_sales_lookup on {SALE_TABLE}(city_ar, location_ar, property_type, period_index)"))
 
 
-def build_sqlite_warehouse(source: pd.DataFrame, db_path: Path = WAREHOUSE_PATH) -> None:
+def build_sqlite_warehouse(
+    source: pd.DataFrame,
+    db_path: Path = WAREHOUSE_PATH,
+    sales_source: pd.DataFrame | None = None,
+) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     clean = prepare_clean_market(source)
     signals = build_market_signals(clean)
-    quality = build_quality_summary(clean)
+    sales = prepare_sale_market(sales_source if sales_source is not None else load_sale_snapshot())
+    quality = build_quality_summary(clean, sales)
     source_registry = official_sources_frame()
     metric_lineage = metric_lineage_frame()
 
@@ -110,9 +170,11 @@ def build_sqlite_warehouse(source: pd.DataFrame, db_path: Path = WAREHOUSE_PATH)
             quality.to_sql(QUALITY_TABLE, connection, if_exists="replace", index=False)
             source_registry.to_sql(SOURCE_REGISTRY_TABLE, connection, if_exists="replace", index=False)
             metric_lineage.to_sql(METRIC_LINEAGE_TABLE, connection, if_exists="replace", index=False)
+            sales.to_sql(SALE_TABLE, connection, if_exists="replace", index=False)
             connection.execute(text(f"create index if not exists idx_clean_period_city on {CLEAN_TABLE}(period_index, city_ar)"))
             connection.execute(text(f"create index if not exists idx_clean_location on {CLEAN_TABLE}(location_ar)"))
             connection.execute(text(f"create index if not exists idx_signals_entity on {SIGNALS_TABLE}(location_ar, property_type)"))
+            connection.execute(text(f"create index if not exists idx_sales_lookup on {SALE_TABLE}(city_ar, location_ar, property_type, period_index)"))
 
 
 def prepare_clean_market(source: pd.DataFrame) -> pd.DataFrame:
@@ -181,7 +243,7 @@ def build_market_signals(clean: pd.DataFrame) -> pd.DataFrame:
     return market
 
 
-def build_quality_summary(clean: pd.DataFrame) -> pd.DataFrame:
+def build_quality_summary(clean: pd.DataFrame, sales: pd.DataFrame | None = None) -> pd.DataFrame:
     if clean.empty:
         return pd.DataFrame(
             [{"metric": "rows", "value": 0}, {"metric": "latest_period", "value": ""}]
@@ -199,6 +261,17 @@ def build_quality_summary(clean: pd.DataFrame) -> pd.DataFrame:
         {"metric": "total_deals", "value": float(clean["total_deals"].sum())},
         {"metric": "sources", "value": clean["dataset_id"].nunique() if "dataset_id" in clean else 0},
     ]
+    if sales is not None and not sales.empty:
+        latest_sale_index = int(sales["period_index"].max())
+        latest_sale = sales[sales["period_index"].eq(latest_sale_index)]
+        rows.extend(
+            [
+                {"metric": "sale_rows", "value": len(sales)},
+                {"metric": "sale_latest_period", "value": str(latest_sale["period"].iloc[0])},
+                {"metric": "sale_districts", "value": sales.loc[sales["geography_level"].eq("district"), "district_ar"].nunique()},
+                {"metric": "sale_property_types", "value": sales["property_type"].nunique()},
+            ]
+        )
     return pd.DataFrame(rows)
 
 
@@ -240,12 +313,16 @@ def warehouse_status() -> dict[str, object]:
         "locations": values.get("locations", 0),
         "sources": values.get("sources", 0),
         "official_sources": active_sources,
+        "sale_rows": values.get("sale_rows", 0),
+        "sale_latest_period": values.get("sale_latest_period", ""),
+        "sale_districts": values.get("sale_districts", 0),
+        "sale_property_types": values.get("sale_property_types", 0),
     }
 
 
 def pg_warehouse_status(db_url: str) -> dict[str, object]:
-    engine = create_postgres_engine(db_url)
     try:
+        engine = create_postgres_engine(db_url)
         with engine.connect() as connection:
             if not pd.io.sql.has_table(QUALITY_TABLE, connection, schema=None):
                 return {"ready": False, "path": "PostgreSQL", "type": "PostgreSQL"}
