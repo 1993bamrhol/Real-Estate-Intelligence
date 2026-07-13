@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -29,6 +30,11 @@ def main() -> None:
         raise SystemExit("Validation failed: no rental data loaded.")
 
     db_url = get_db_connection_string()
+    if os.environ.get("DATABASE_URL", "").strip() and not db_url:
+        raise SystemExit(
+            "DATABASE_URL is configured but invalid. Store only the PostgreSQL URL "
+            "or a DATABASE_URL = \"postgresql://...\" assignment."
+        )
     if db_url:
         print("Connecting to PostgreSQL and building warehouse...")
         engine = create_postgres_engine(db_url)
