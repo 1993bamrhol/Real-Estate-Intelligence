@@ -1,6 +1,6 @@
 # Real Estate Intelligence
 
-[التطبيق المباشر](https://real-estate-intelligence-bygmdnnypwgfrnfuerekes.streamlit.app/)
+[التطبيق المباشر](https://real-estate-intelligence-n7ibv43gwsfeuuew28wnht.streamlit.app/)
 
 منصة رقمية لتحليل فرص الإيجار العقاري في المملكة اعتمادا على البيانات المفتوحة الرسمية من الهيئة العامة للعقار ومنصة البيانات المفتوحة الوطنية.
 
