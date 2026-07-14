@@ -13,6 +13,11 @@ from real_estate_intel.brand import BRAND_NAME_AR, BRAND_TAGLINE, PRICING_PLANS,
 
 
 class BrandTests(unittest.TestCase):
+    def test_svg_brand_mark_is_available(self) -> None:
+        logo = ROOT / "assets" / "brand" / "qareena-mark.svg"
+        self.assertTrue(logo.is_file())
+        self.assertIn(b"<svg", logo.read_bytes())
+
     def test_brand_has_a_clear_name_and_promise(self) -> None:
         self.assertTrue(BRAND_NAME_AR)
         self.assertIn("القرار", BRAND_TAGLINE)
