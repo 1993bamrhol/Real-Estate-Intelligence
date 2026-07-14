@@ -1,4 +1,4 @@
-# Real Estate Intelligence
+# قرينة | QAREENA
 
 [التطبيق المباشر](https://real-estate-intelligence-n7ibv43gwsfeuuew28wnht.streamlit.app/)
 
