@@ -62,9 +62,11 @@ from real_estate_intel.developer_ai import (
 )
 from real_estate_intel.developer_projects import (
     connect_developer_project_store,
+    delete_developer_project,
     load_developer_projects,
     project_comparison_row,
     save_developer_project,
+    workspace_fingerprint,
 )
 from real_estate_intel.forecasting import forecast_market
 from real_estate_intel.official_sources import (
@@ -1837,6 +1839,11 @@ def safe_float(value: object, default: float = 0.0) -> float:
         return default
 
 
+def widget_default(key: str, value: object) -> dict[str, object]:
+    """Provide a widget default only before Streamlit creates its session value."""
+    return {} if key in st.session_state else {"value": value}
+
+
 def assistant_decision(row: pd.Series, ranking: pd.DataFrame, mode: str, min_deals: int) -> str:
     """Generates a clear, actionable decision based on the analysis."""
     score = safe_float(row.get("score", 0))
@@ -2725,6 +2732,74 @@ def main() -> None:
         render_platform_page()
 
 
+def apply_pending_developer_project(property_types: list[str]) -> str | None:
+    """Apply a cloud project to widget state before its widgets are instantiated."""
+    pending = st.session_state.pop("pending_developer_project_load", None)
+    if not isinstance(pending, dict):
+        return None
+
+    project = pending.get("project")
+    if not isinstance(project, dict):
+        return None
+    assumptions = project.get("assumptions")
+    if not isinstance(assumptions, dict):
+        return None
+
+    saved_type = str(project.get("property_type", "")).strip()
+    current_type = str(st.session_state.get("developer_ai_property_type", "")).strip()
+    selected_type = (
+        saved_type
+        if saved_type in property_types
+        else current_type
+        if current_type in property_types
+        else property_types[0]
+    )
+    st.session_state["developer_ai_property_type"] = selected_type
+
+    def bounded_float(name: str, default: float, minimum: float, maximum: float | None = None) -> float:
+        value = max(safe_float(assumptions.get(name), default), minimum)
+        return min(value, maximum) if maximum is not None else value
+
+    def bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
+        return int(round(bounded_float(name, float(default), float(minimum), float(maximum))))
+
+    widget_values: dict[str, float | int | str] = {
+        "dev_land_area": bounded_float("land_area_sqm", 2_000.0, 100.0),
+        "dev_land_cost": bounded_float("land_cost", 4_000_000.0, 0.0),
+        "dev_far": bounded_float("floor_area_ratio", 2.0, 0.1, 10.0),
+        "dev_efficiency": bounded_int("saleable_efficiency_pct", 80, 50, 95),
+        "dev_unit_area": bounded_float("average_unit_area_sqm", 120.0, 20.0),
+        "dev_construction_cost": bounded_float("construction_cost_per_sqm", 2_200.0, 0.0),
+        f"dev_sale_price_{selected_type}": bounded_float("sale_price_per_sqm", 0.0, 0.0),
+        f"dev_annual_rent_{selected_type}": bounded_float("annual_rent_per_unit", 0.0, 0.0),
+        "dev_soft": bounded_int("soft_cost_pct", 12, 0, 30),
+        "dev_contingency": bounded_int("contingency_pct", 7, 0, 25),
+        "dev_finance": bounded_int("finance_pct", 8, 0, 30),
+        "dev_target_margin": bounded_int("target_margin_pct", 20, 5, 45),
+        "dev_marketing": bounded_int("marketing_pct", 3, 0, 15),
+        "dev_occupancy": bounded_int("occupancy_pct", 90, 50, 100),
+        "dev_years": bounded_float("development_years", 2.0, 0.5, 10.0),
+    }
+    project_name = str(project.get("project_name", "مشروع محفوظ")).strip() or "مشروع محفوظ"
+    if bool(pending.get("copy")):
+        project_name = f"{project_name} - نسخة"
+    widget_values[f"developer_project_name_{selected_type}"] = project_name
+    for key, value in widget_values.items():
+        st.session_state[key] = value
+
+    if saved_type and saved_type not in property_types:
+        return f"تم تحميل افتراضات {project_name}، لكن نوعه المحفوظ غير متاح في الفلتر الحالي؛ استُخدم {selected_type}."
+    action = "إنشاء نسخة قابلة للتعديل من" if bool(pending.get("copy")) else "تحميل"
+    return f"تم {action} {project_name}. راجع الافتراضات ثم احفظ لتحديث المشروع."
+
+
+def cache_developer_cloud_projects(projects: list[dict[str, object]], workspace_code: str) -> None:
+    st.session_state["developer_cloud_projects"] = {
+        str(project.get("project_name", "مشروع بدون اسم")): project for project in projects
+    }
+    st.session_state["developer_cloud_workspace"] = workspace_fingerprint(workspace_code)
+
+
 def render_developer_ai(market_data: pd.DataFrame, sale_data: pd.DataFrame) -> None:
     st.markdown("## قرينة AI للمطور العقاري")
     st.caption(
@@ -2743,11 +2818,14 @@ def render_developer_ai(market_data: pd.DataFrame, sale_data: pd.DataFrame) -> N
         return
 
     property_types = sorted(market_by_type["property_type"].astype(str).unique())
+    loaded_project_notice = apply_pending_developer_project(property_types)
     selected_type = st.selectbox(
         "نوع المنتج الأساسي",
         property_types,
         key="developer_ai_property_type",
     )
+    if loaded_project_notice:
+        st.success(loaded_project_notice)
     selected_market = market_by_type[market_by_type["property_type"].astype(str).eq(selected_type)].iloc[0]
     annual_rent_benchmark = max(safe_float(selected_market["average_rent"], 0), 0)
     sample_size = int(max(safe_float(selected_market["total_deals"], 0), 0))
@@ -2764,28 +2842,30 @@ def render_developer_ai(market_data: pd.DataFrame, sale_data: pd.DataFrame) -> N
     with st.expander("افتراضات المشروع", expanded=True):
         first = st.columns(4)
         land_area = first[0].number_input(
-            "مساحة الأرض (م²)", min_value=100.0, value=2_000.0, step=100.0, key="dev_land_area"
+            "مساحة الأرض (م²)", min_value=100.0, step=100.0, key="dev_land_area",
+            **widget_default("dev_land_area", 2_000.0),
         )
         land_cost = first[1].number_input(
-            "سعر الأرض الإجمالي (ر.س)", min_value=0.0, value=4_000_000.0,
-            step=100_000.0, key="dev_land_cost"
+            "سعر الأرض الإجمالي (ر.س)", min_value=0.0, step=100_000.0, key="dev_land_cost",
+            **widget_default("dev_land_cost", 4_000_000.0),
         )
         floor_area_ratio = first[2].number_input(
-            "معامل البناء FAR", min_value=0.1, max_value=10.0, value=2.0,
-            step=0.1, key="dev_far"
+            "معامل البناء FAR", min_value=0.1, max_value=10.0, step=0.1, key="dev_far",
+            **widget_default("dev_far", 2.0),
         )
         efficiency = first[3].slider(
-            "كفاءة المساحة القابلة للبيع", 50, 95, 80, key="dev_efficiency"
+            "كفاءة المساحة القابلة للبيع", 50, 95, key="dev_efficiency",
+            **widget_default("dev_efficiency", 80),
         )
 
         second = st.columns(4)
         unit_area = second[0].number_input(
-            "متوسط مساحة الوحدة (م²)", min_value=20.0, value=120.0,
-            step=5.0, key="dev_unit_area"
+            "متوسط مساحة الوحدة (م²)", min_value=20.0, step=5.0, key="dev_unit_area",
+            **widget_default("dev_unit_area", 120.0),
         )
         construction_cost = second[1].number_input(
-            "تكلفة البناء للمتر (ر.س)", min_value=0.0, value=2_200.0,
-            step=100.0, key="dev_construction_cost"
+            "تكلفة البناء للمتر (ر.س)", min_value=0.0, step=100.0, key="dev_construction_cost",
+            **widget_default("dev_construction_cost", 2_200.0),
         )
         derived_sale_price = (
             annual_rent_benchmark / 0.06 / max(float(unit_area), 1.0)
@@ -2793,28 +2873,47 @@ def render_developer_ai(market_data: pd.DataFrame, sale_data: pd.DataFrame) -> N
         )
         default_sale_price = sale_benchmark if sale_benchmark > 0 else derived_sale_price
         sale_price = second[2].number_input(
-            "سعر البيع المستهدف للمتر (ر.س)", min_value=0.0,
-            value=float(round(default_sale_price / 50) * 50), step=100.0,
-            key=f"dev_sale_price_{selected_type}"
+            "سعر البيع المستهدف للمتر (ر.س)", min_value=0.0, step=100.0,
+            key=f"dev_sale_price_{selected_type}",
+            **widget_default(
+                f"dev_sale_price_{selected_type}", float(round(default_sale_price / 50) * 50)
+            ),
         )
         annual_rent = second[3].number_input(
-            "الإيجار السنوي المتوقع للوحدة", min_value=0.0,
-            value=float(round(annual_rent_benchmark / 500) * 500), step=500.0,
-            key=f"dev_annual_rent_{selected_type}"
+            "الإيجار السنوي المتوقع للوحدة", min_value=0.0, step=500.0,
+            key=f"dev_annual_rent_{selected_type}",
+            **widget_default(
+                f"dev_annual_rent_{selected_type}", float(round(annual_rent_benchmark / 500) * 500)
+            ),
         )
 
         third = st.columns(4)
-        soft_cost = third[0].slider("التكاليف غير المباشرة %", 0, 30, 12, key="dev_soft")
-        contingency = third[1].slider("الاحتياطي %", 0, 25, 7, key="dev_contingency")
-        finance = third[2].slider("تكلفة التمويل %", 0, 30, 8, key="dev_finance")
-        target_margin = third[3].slider("هامش الربح المستهدف %", 5, 45, 20, key="dev_target_margin")
+        soft_cost = third[0].slider(
+            "التكاليف غير المباشرة %", 0, 30, key="dev_soft", **widget_default("dev_soft", 12)
+        )
+        contingency = third[1].slider(
+            "الاحتياطي %", 0, 25, key="dev_contingency", **widget_default("dev_contingency", 7)
+        )
+        finance = third[2].slider(
+            "تكلفة التمويل %", 0, 30, key="dev_finance", **widget_default("dev_finance", 8)
+        )
+        target_margin = third[3].slider(
+            "هامش الربح المستهدف %", 5, 45, key="dev_target_margin",
+            **widget_default("dev_target_margin", 20),
+        )
 
         fourth = st.columns(3)
-        marketing = fourth[0].slider("التسويق والمبيعات %", 0, 15, 3, key="dev_marketing")
-        occupancy = fourth[1].slider("الإشغال المتوقع %", 50, 100, 90, key="dev_occupancy")
+        marketing = fourth[0].slider(
+            "التسويق والمبيعات %", 0, 15, key="dev_marketing",
+            **widget_default("dev_marketing", 3),
+        )
+        occupancy = fourth[1].slider(
+            "الإشغال المتوقع %", 50, 100, key="dev_occupancy",
+            **widget_default("dev_occupancy", 90),
+        )
         development_years = fourth[2].number_input(
-            "مدة التطوير (سنة)", min_value=0.5, max_value=10.0, value=2.0,
-            step=0.5, key="dev_years"
+            "مدة التطوير (سنة)", min_value=0.5, max_value=10.0, step=0.5, key="dev_years",
+            **widget_default("dev_years", 2.0),
         )
 
         reference_text = (
@@ -3030,8 +3129,8 @@ def render_developer_decision_lab(
         st.caption("احفظ نسخًا من الافتراضات الحالية وقارن أفضل مشروع وفق الربح والهامش والمرونة.")
         project_name = st.text_input(
             "اسم المشروع أو الأرض",
-            value=f"مشروع {selected_type}",
             key=f"developer_project_name_{selected_type}",
+            **widget_default(f"developer_project_name_{selected_type}", f"مشروع {selected_type}"),
         )
         save_col, clear_col = st.columns([2, 1])
         if save_col.button(
@@ -3121,7 +3220,7 @@ def render_developer_decision_lab(
         )
         cloud_save_col, cloud_load_col = st.columns(2)
         save_cloud = cloud_save_col.button(
-            "حفظ دائم في Supabase",
+            "حفظ أو تحديث في Supabase",
             key=f"save_developer_project_cloud_{selected_type}",
             width="stretch",
         )
@@ -3153,7 +3252,11 @@ def render_developer_decision_lab(
                         projects[str(project_name).strip()] = project_snapshot(
                             project_name, assumptions, result, stress
                         )
-                        st.success("تم حفظ المشروع بصورة دائمة في Supabase.")
+                        cache_developer_cloud_projects(
+                            load_developer_projects(store, workspace_code=workspace_code),
+                            workspace_code,
+                        )
+                        st.success("تم حفظ المشروع بصورة دائمة. استخدام الاسم نفسه يحدّث النسخة الحالية.")
                 except ValueError as exc:
                     st.error(str(exc))
                 except Exception:
@@ -3172,6 +3275,7 @@ def render_developer_decision_lab(
                             store,
                             workspace_code=workspace_code,
                         )
+                        cache_developer_cloud_projects(cloud_projects, workspace_code)
                         session_projects = st.session_state.setdefault(
                             "developer_project_snapshots", {}
                         )
@@ -3187,6 +3291,87 @@ def render_developer_decision_lab(
                     st.error(str(exc))
                 except Exception:
                     st.error("تعذر قراءة المشاريع من Supabase. تحقق من الاتصال وإنشاء الجدول.")
+
+        cloud_projects = st.session_state.get("developer_cloud_projects", {})
+        cached_workspace = st.session_state.get("developer_cloud_workspace")
+        current_workspace = None
+        if len(workspace_code.strip()) >= 8:
+            current_workspace = workspace_fingerprint(workspace_code)
+        if cloud_projects and cached_workspace == current_workspace:
+            st.markdown("##### إدارة المشاريع المحفوظة")
+            cloud_project_name = st.selectbox(
+                "اختر مشروعًا",
+                list(cloud_projects),
+                key="selected_developer_cloud_project",
+            )
+            cloud_project = cloud_projects[cloud_project_name]
+            cloud_result = dict(cloud_project.get("result", {}))
+            cloud_stress = dict(cloud_project.get("stress", {}))
+            saved_summary = st.columns(4)
+            saved_summary[0].metric("النوع", str(cloud_project.get("property_type", "—")) or "—")
+            saved_summary[1].metric("الدرجة", f"{safe_float(cloud_result.get('development_score')):.1f}/100")
+            saved_summary[2].metric("الهامش", f"{safe_float(cloud_result.get('margin_pct')):.1f}%")
+            saved_summary[3].metric("ربح المتحفظ", format_sar(safe_float(cloud_stress.get("downside_profit"))))
+
+            load_col, copy_col = st.columns(2)
+            if load_col.button(
+                "تحميل للتعديل",
+                type="primary",
+                key="load_selected_developer_project",
+                width="stretch",
+            ):
+                st.session_state["pending_developer_project_load"] = {
+                    "project": cloud_project,
+                    "copy": False,
+                }
+                st.rerun()
+            if copy_col.button(
+                "إنشاء نسخة",
+                key="copy_selected_developer_project",
+                width="stretch",
+            ):
+                st.session_state["pending_developer_project_load"] = {
+                    "project": cloud_project,
+                    "copy": True,
+                }
+                st.rerun()
+
+            confirm_delete = st.checkbox(
+                f"أؤكد حذف «{cloud_project_name}» نهائيًا من Supabase",
+                key=f"confirm_delete_developer_project_{cloud_project_name}",
+            )
+            if st.button(
+                "حذف المشروع المحفوظ",
+                disabled=not confirm_delete,
+                key=f"delete_developer_project_{cloud_project_name}",
+            ):
+                try:
+                    store = get_developer_project_store()
+                    if store is None:
+                        st.warning("الحذف غير متاح لأن DATABASE_URL غير مهيأ في Streamlit Secrets.")
+                    elif delete_developer_project(
+                        store,
+                        workspace_code=workspace_code,
+                        project_name=cloud_project_name,
+                    ):
+                        cloud_projects.pop(cloud_project_name, None)
+                        st.session_state.get("developer_project_snapshots", {}).pop(
+                            cloud_project_name, None
+                        )
+                        st.session_state["developer_cloud_action_notice"] = (
+                            f"تم حذف {cloud_project_name} من Supabase."
+                        )
+                        st.rerun()
+                    else:
+                        st.info("المشروع غير موجود أو حُذف سابقًا.")
+                except ValueError as exc:
+                    st.error(str(exc))
+                except Exception:
+                    st.error("تعذر حذف المشروع من Supabase. تحقق من الاتصال ثم أعد المحاولة.")
+
+        cloud_action_notice = st.session_state.pop("developer_cloud_action_notice", None)
+        if cloud_action_notice:
+            st.success(str(cloud_action_notice))
 
 
 def developer_sale_benchmark(
