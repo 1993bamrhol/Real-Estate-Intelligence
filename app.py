@@ -111,7 +111,24 @@ st.markdown(
     .block-container { padding-top: 1.1rem; max-width: 1540px; }
     div[data-testid="stMetricValue"] { direction: ltr; text-align: right; }
     div[data-testid="stMetricDelta"] { direction: ltr; text-align: right; }
-    div[data-testid="stMetricLabel"] { text-align: right; }
+    div[data-testid="stMetricLabel"] {
+        text-align: right;
+        min-height: 2.45rem;
+        align-items: flex-start;
+    }
+    div[data-testid="stMetricLabel"] p {
+        white-space: normal;
+        line-height: 1.35;
+        font-size: .82rem;
+    }
+    div[data-testid="stMetricValue"] {
+        font-size: clamp(1.35rem, 2vw, 2rem);
+        line-height: 1.2;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    div[data-testid="InputInstructions"] { display: none !important; }
     div[data-testid="metric-container"] {
         background: var(--panel);
         border: 1px solid var(--line);
@@ -706,7 +723,9 @@ def render_decision_assistant(
             "اكتب سؤالك",
             value=selected_question,
             placeholder="مثال: لدي 800 ألف ر.س، ما أفضل المناطق للاستثمار؟",
+            key="real_estate_analyst_question",
         )
+        st.caption("تتحدث النتيجة مباشرة أثناء الكتابة؛ لا حاجة للضغط على Enter.")
 
     answer = answer_decision_question(question, data, settings, snapshot)
     render_assistant_answer(answer)
@@ -2057,23 +2076,84 @@ def render_sale_indicator_coverage(sales: pd.DataFrame) -> None:
 
         if not latest.empty:
             latest = latest.sort_values("average_price_per_sqm", ascending=False)
+            st.markdown("#### متوسط سعر المتر الرسمي حسب الحي")
+            st.caption(f"الفترة: {period} — مرّر المؤشر أو المس العمود لعرض السعر والصفقات، والقيم ثابتة في الجدول أدناه.")
             fig = px.bar(
                 latest,
-                x="location_ar",
-                y="average_price_per_sqm",
+                x="average_price_per_sqm",
+                y="location_ar",
+                orientation="h",
                 color="property_type",
-                text="deed_count",
+                text="average_price_per_sqm",
+                custom_data=["property_type", "deed_count", "period"],
                 labels={
                     "location_ar": "الحي",
                     "average_price_per_sqm": "متوسط سعر المتر (ر.س)",
                     "property_type": "نوع العقار",
                     "deed_count": "عدد الصفقات",
                 },
-                title=f"متوسط سعر المتر الرسمي حسب الحي — {period}",
+                color_discrete_sequence=["#0b6b53", "#1c5d99", "#b87918", "#6f7f78"],
             )
-            fig.update_traces(texttemplate="%{text:,.0f} صفقة", textposition="outside")
-            fig.update_layout(showlegend=False)
+            fig.update_traces(
+                texttemplate="%{text:,.0f} ر.س",
+                textposition="outside",
+                cliponaxis=False,
+                opacity=0.94,
+                marker_line_color="#ffffff",
+                marker_line_width=1.2,
+                hovertemplate=(
+                    "<b>%{y}</b><br>"
+                    "نوع العقار: %{customdata[0]}<br>"
+                    "متوسط سعر المتر: %{x:,.0f} ر.س<br>"
+                    "عدد الصفقات: %{customdata[1]:,.0f}<br>"
+                    "الفترة: %{customdata[2]}"
+                    "<extra></extra>"
+                ),
+            )
+            fig.update_layout(
+                showlegend=latest["property_type"].nunique() > 1,
+                legend={"orientation": "h", "y": 1.08, "x": 0},
+                hoverlabel={
+                    "bgcolor": "#ffffff",
+                    "bordercolor": "#0b6b53",
+                    "font": {"color": "#17211f", "size": 13},
+                    "align": "right",
+                },
+                bargap=0.28,
+            )
+            apply_chart_spacing(
+                fig,
+                height=max(340, 92 + len(latest) * 74),
+                margin={"l": 126, "r": 118, "t": 48, "b": 96},
+            )
+            fig.update_xaxes(
+                tickformat=",.0f",
+                title_text="متوسط سعر المتر (ر.س)",
+                title_standoff=24,
+                rangemode="tozero",
+            )
+            fig.update_yaxes(title_text="", autorange="reversed", automargin=True)
             render_chart(fig)
+
+            sale_view = latest[
+                ["location_ar", "property_type", "average_price_per_sqm", "deed_count"]
+            ].rename(
+                columns={
+                    "location_ar": "الحي",
+                    "property_type": "نوع العقار",
+                    "average_price_per_sqm": "متوسط سعر المتر",
+                    "deed_count": "عدد الصفقات",
+                }
+            )
+            st.dataframe(
+                sale_view,
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "متوسط سعر المتر": st.column_config.NumberColumn(format="%.0f ر.س"),
+                    "عدد الصفقات": st.column_config.NumberColumn(format="%.0f"),
+                },
+            )
 
         source_urls = sales["source_url"].dropna().astype(str)
         if not source_urls.empty and source_urls.iloc[0]:
