@@ -36,6 +36,15 @@ from real_estate_intel.analytics import (
     top_growth_markets,
     weighted_average,
 )
+from real_estate_intel.brand import (
+    BRAND_DISCLAIMER,
+    BRAND_NAME_AR,
+    BRAND_NAME_EN,
+    BRAND_PROMISE,
+    BRAND_TAGLINE,
+    PRICING_PLANS,
+    USE_CASES,
+)
 from real_estate_intel.catalog import REGA_OPEN_DATA_PAGE
 from real_estate_intel.data_engine import load_market_data, load_sale_market_data, warehouse_status
 from real_estate_intel.data_prep import load_rental_data, location_label
@@ -57,7 +66,7 @@ from real_estate_intel.user_profiles import (
     user_profile_labels,
 )
 
-st.set_page_config(page_title="Real Estate Intelligence", layout="wide")
+st.set_page_config(page_title=f"{BRAND_NAME_AR} | {BRAND_TAGLINE}", page_icon="📊", layout="wide")
 
 st.markdown(
     """
@@ -113,6 +122,20 @@ st.markdown(
         line-height: 1.08;
         letter-spacing: 0;
     }
+    .brand-lockup {
+        display: flex;
+        align-items: center;
+        gap: .9rem;
+    }
+    .brand-lockup svg { width: 64px; height: 64px; flex: 0 0 auto; }
+    .brand-lockup small {
+        display: block;
+        color: var(--teal);
+        font-weight: 700;
+        letter-spacing: .12em;
+        direction: ltr;
+        text-align: right;
+    }
     .digital-header p {
         margin: .45rem 0 0;
         color: var(--muted);
@@ -159,6 +182,15 @@ st.markdown(
         padding: .28rem .65rem;
         font-size: .84rem;
     }
+    .marketing-hero {
+        background: linear-gradient(135deg, #102a25 0%, #0b6b53 70%, #167d62 100%);
+        color: #fff;
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+    }
+    .marketing-hero h2 { color: #fff; margin: 0 0 .45rem; font-size: 2rem; }
+    .marketing-hero p { color: #e8f6f1; max-width: 760px; margin: .25rem 0; }
     .ai-briefing {
         display: grid;
         grid-template-columns: minmax(0, 1.45fr) minmax(280px, .75fr);
@@ -480,11 +512,18 @@ def render_digital_header(data: pd.DataFrame) -> None:
     cities = f"{data['city_ar'].nunique():,.0f}" if "city_ar" in data else "0"
     sources = f"{data['dataset_id'].nunique():,.0f}" if "dataset_id" in data else "0"
 
+    logo_svg = (ROOT / "assets" / "brand" / "qareena-mark.svg").read_text(encoding="utf-8")
     st.markdown(
         f"""
         <section class="digital-header">
-            <h1>Real Estate Intelligence</h1>
-            <p>رؤية السوق العقاري السعودي حسب الفلتر الحالي، مع قراءة قرار مبنية على البيانات المفتوحة.</p>
+            <div class="brand-lockup">
+                {logo_svg}
+                <div>
+                    <small>{escape(BRAND_NAME_EN)}</small>
+                    <h1>{escape(BRAND_NAME_AR)}</h1>
+                    <p>{escape(BRAND_TAGLINE)} — {escape(BRAND_PROMISE)}</p>
+                </div>
+            </div>
             <div class="status-strip">
                 <span class="status-chip">آخر فترة: {escape(latest_text)}</span>
                 <span class="status-chip">السجلات: {records}</span>
@@ -2425,6 +2464,13 @@ def scope_narrative(data: pd.DataFrame) -> str:
 
 
 def render_user_profile_selector() -> UserProfile:
+    logo_svg = (ROOT / "assets" / "brand" / "qareena-mark.svg").read_text(encoding="utf-8")
+    st.sidebar.markdown(
+        f'<div class="brand-lockup">{logo_svg}<div><small>{escape(BRAND_NAME_EN)}</small><strong>{escape(BRAND_NAME_AR)}</strong></div></div>',
+        unsafe_allow_html=True,
+    )
+    st.sidebar.caption(BRAND_TAGLINE)
+    st.sidebar.divider()
     st.sidebar.markdown("### وضع الاستخدام")
     labels = user_profile_labels()
     selected_label = st.sidebar.selectbox(
@@ -2455,6 +2501,61 @@ def render_user_profile_overview(profile: UserProfile) -> None:
     )
 
 
+def render_platform_page() -> None:
+    st.markdown(
+        f"""
+        <section class="marketing-hero">
+            <h2>{escape(BRAND_NAME_AR)} — {escape(BRAND_TAGLINE)}</h2>
+            <p>{escape(BRAND_PROMISE)}</p>
+            <p>منصة سعودية لتحويل بيانات السوق والمؤشرات الرسمية إلى مقارنة وتوقع وتقرير قرار قابل للمشاركة.</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    about_tab, pricing_tab, cases_tab = st.tabs(["عن المنصة", "الباقات", "أمثلة الاستخدام"])
+    with about_tab:
+        st.subheader("لماذا قرينة؟")
+        st.write(
+            "لأن عرض المتوسطات وحده لا يكفي. قرينة تربط السوق بالعقار نفسه، وتوضح العائد والمخاطر "
+            "والبدائل وحدود الثقة حتى يعرف المستخدم لماذا خرجت التوصية."
+        )
+        columns = st.columns(4)
+        values = (
+            ("بيانات قابلة للتتبع", "مصادر رسمية، فترة واضحة، وفحص جودة قبل العرض."),
+            ("قرار لا مجرد رسم", "تقييم صفقة وسعر عادل واختبار ضغط وسيناريوهات."),
+            ("تجربة حسب الدور", "مسار مختلف للمستثمر والوسيط والمطور والباحث."),
+            ("مخرجات قابلة للمشاركة", "تقارير PDF وHTML ومقارنات يمكن شرحها للشركاء."),
+        )
+        for column, (title, description) in zip(columns, values):
+            with column.container(border=True):
+                st.markdown(f"**{title}**")
+                st.caption(description)
+        st.info(BRAND_DISCLAIMER)
+
+    with pricing_tab:
+        st.subheader("باقات إطلاق مقترحة")
+        st.caption("هذه صفحة تسعير تجريبية لقياس الاهتمام؛ لا يوجد دفع أو اشتراك مفعّل حاليًا.")
+        columns = st.columns(len(PRICING_PLANS))
+        for column, plan in zip(columns, PRICING_PLANS):
+            with column.container(border=True):
+                st.markdown(f"### {plan.name}")
+                st.markdown(f"**{plan.price}**")
+                st.caption(plan.audience)
+                for feature in plan.features:
+                    st.markdown(f"✓ {feature}")
+                st.button(plan.call_to_action, key=f"pricing_{plan.name}", disabled=True, width="stretch")
+
+    with cases_tab:
+        st.subheader("كيف تُستخدم المنصة؟")
+        st.caption("أمثلة تطبيقية توضيحية مبنية على قدرات المنتج الحالية، وليست شهادات أو نتائج لعملاء فعليين.")
+        for case in USE_CASES:
+            with st.container(border=True):
+                st.markdown(f"### {case.title} · {case.audience}")
+                st.markdown(f"**السؤال:** {case.question}")
+                st.write(case.outcome)
+
+
 def main() -> None:
     user_profile = render_user_profile_selector()
     warehouse_version = get_warehouse_version_string()
@@ -2474,8 +2575,8 @@ def main() -> None:
     snapshot = build_market_snapshot(filtered, settings)
     settings["user_profile"] = user_profile.key
     render_user_profile_overview(user_profile)
-    decision_tab, analyst_tab, market_tab, data_tab = st.tabs(
-        list(user_profile.tab_labels)
+    decision_tab, analyst_tab, market_tab, data_tab, platform_tab = st.tabs(
+        [*list(user_profile.tab_labels), "المنصة"]
     )
 
     with decision_tab:
@@ -2510,6 +2611,9 @@ def main() -> None:
         render_data_quality(filtered)
         with st.expander("البيانات الموحدة", expanded=False):
             render_data_table(filtered, nested=True)
+
+    with platform_tab:
+        render_platform_page()
 
 
 def render_empty_state() -> None:
