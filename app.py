@@ -50,6 +50,12 @@ from real_estate_intel.official_sources import (
 from real_estate_intel.reporting import build_investment_memo_html, build_investment_memo_pdf
 from real_estate_intel.sales import latest_sale_comparable
 from real_estate_intel.underwriting import PropertyAssumptions, analyze_property, stress_test_property
+from real_estate_intel.user_profiles import (
+    UserProfile,
+    get_user_profile,
+    user_profile_key_from_label,
+    user_profile_labels,
+)
 
 st.set_page_config(page_title="Real Estate Intelligence", layout="wide")
 
@@ -129,6 +135,29 @@ st.markdown(
         color: var(--ink);
         font-size: .86rem;
         white-space: nowrap;
+    }
+    .profile-banner {
+        background: linear-gradient(135deg, #0b6b53 0%, #134f42 100%);
+        color: #ffffff;
+        border-radius: 10px;
+        padding: 1rem 1.15rem;
+        margin: 0 0 1rem;
+        box-shadow: 0 12px 28px rgba(11, 107, 83, 0.16);
+    }
+    .profile-banner h3 { color: #ffffff; margin: 0 0 .35rem; }
+    .profile-banner p { color: #e8f6f1; margin: .2rem 0; }
+    .profile-focus {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .45rem;
+        margin-top: .75rem;
+    }
+    .profile-focus span {
+        border: 1px solid rgba(255, 255, 255, .28);
+        background: rgba(255, 255, 255, .1);
+        border-radius: 999px;
+        padding: .28rem .65rem;
+        font-size: .84rem;
     }
     .ai-briefing {
         display: grid;
@@ -2395,7 +2424,39 @@ def scope_narrative(data: pd.DataFrame) -> str:
     return f"آخر فترة {latest_text}، مع {locations:,.0f} موقع و{property_types:,.0f} نوع عقار داخل الفلتر."
 
 
+def render_user_profile_selector() -> UserProfile:
+    st.sidebar.markdown("### وضع الاستخدام")
+    labels = user_profile_labels()
+    selected_label = st.sidebar.selectbox(
+        "اختر دورك",
+        labels,
+        index=0,
+        key="user_profile_label",
+        help="يغير ترتيب الأولويات والمحتوى المعروض دون تغيير مصدر البيانات.",
+    )
+    profile = get_user_profile(user_profile_key_from_label(selected_label))
+    st.sidebar.caption(profile.description)
+    st.sidebar.divider()
+    return profile
+
+
+def render_user_profile_overview(profile: UserProfile) -> None:
+    focus = "".join(f"<span>{escape(metric)}</span>" for metric in profile.focus_metrics)
+    st.markdown(
+        f"""
+        <section class="profile-banner">
+            <h3>وضع {escape(profile.label)}</h3>
+            <p><strong>السؤال الرئيسي:</strong> {escape(profile.primary_question)}</p>
+            <p><strong>الخطوة المقترحة:</strong> {escape(profile.next_action)}</p>
+            <div class="profile-focus">{focus}</div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def main() -> None:
+    user_profile = render_user_profile_selector()
     warehouse_version = get_warehouse_version_string()
     data = get_data(warehouse_version)
     sale_data = get_sale_data(warehouse_version)
@@ -2411,12 +2472,21 @@ def main() -> None:
         return
 
     snapshot = build_market_snapshot(filtered, settings)
+    settings["user_profile"] = user_profile.key
+    render_user_profile_overview(user_profile)
     decision_tab, analyst_tab, market_tab, data_tab = st.tabs(
-        ["قرار المستثمر", "المحلل العقاري", "السوق والخرائط", "البيانات والجودة"]
+        list(user_profile.tab_labels)
     )
 
     with decision_tab:
-        render_riyadh_first_page(data, settings, sale_data)
+        if user_profile.key in {"investor", "broker"}:
+            render_riyadh_first_page(data, settings, sale_data)
+        elif user_profile.key == "developer":
+            render_kpis(filtered, settings, snapshot)
+            render_charts(filtered, settings, snapshot)
+        else:
+            render_ai_briefing(filtered, settings, snapshot)
+            render_kpis(filtered, settings, snapshot)
 
     with analyst_tab:
         render_ai_briefing(filtered, settings, snapshot)
