@@ -4,6 +4,7 @@ import base64
 from html import escape
 import re
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -36,6 +37,13 @@ from real_estate_intel.analytics import (
     quarterly_trend,
     top_growth_markets,
     weighted_average,
+)
+from real_estate_intel.auth import (
+    AuthError,
+    AuthSession,
+    SupabaseAuthClient,
+    personal_workspace_code,
+    resolve_auth_config,
 )
 from real_estate_intel.brand import (
     BRAND_DISCLAIMER,
@@ -529,6 +537,141 @@ def get_warehouse_version_string() -> str:
 @st.cache_resource(show_spinner=False)
 def get_developer_project_store():
     return connect_developer_project_store()
+
+
+def get_supabase_auth_client() -> SupabaseAuthClient | None:
+    try:
+        secrets = {
+            key: st.secrets.get(key, "")
+            for key in ("SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_ANON_KEY")
+        }
+    except Exception:
+        secrets = {}
+    config = resolve_auth_config(secrets)
+    return SupabaseAuthClient(config) if config is not None else None
+
+
+def clear_authenticated_user_state() -> None:
+    for key in (
+        "qareena_auth_session",
+        "qareena_auth_pending_email",
+        "qareena_auth_email",
+        "qareena_auth_otp",
+        "developer_cloud_projects",
+        "developer_cloud_workspace",
+        "developer_project_snapshots",
+        "pending_developer_project_load",
+        "selected_developer_cloud_project",
+        "developer_workspace_code",
+        "use_legacy_developer_workspace",
+    ):
+        st.session_state.pop(key, None)
+
+
+def current_auth_session(client: SupabaseAuthClient | None = None) -> AuthSession | None:
+    raw_session = st.session_state.get("qareena_auth_session")
+    if not isinstance(raw_session, dict):
+        return None
+    try:
+        session = AuthSession.restore(raw_session)
+        if not session.access_token or not session.refresh_token:
+            raise AuthError("جلسة المستخدم غير صالحة.")
+        if session.expires_at <= int(time.time()) + 90:
+            if client is None:
+                raise AuthError("تعذر تجديد جلسة الدخول.")
+            session = client.refresh_session(session.refresh_token)
+            st.session_state["qareena_auth_session"] = session.as_dict()
+        return session
+    except AuthError:
+        clear_authenticated_user_state()
+        st.session_state["qareena_auth_notice"] = (
+            "انتهت جلسة الدخول. اطلب رمزًا جديدًا للمتابعة."
+        )
+        return None
+
+
+def current_authenticated_user() -> dict[str, object] | None:
+    raw_session = st.session_state.get("qareena_auth_session")
+    if not isinstance(raw_session, dict):
+        return None
+    user = raw_session.get("user")
+    return dict(user) if isinstance(user, dict) and user.get("id") else None
+
+
+def render_auth_sidebar() -> None:
+    st.sidebar.markdown("### حساب قرينة")
+    try:
+        client = get_supabase_auth_client()
+    except ValueError:
+        client = None
+        st.sidebar.error("إعدادات Supabase Auth غير صحيحة.")
+
+    notice = st.session_state.pop("qareena_auth_notice", None)
+    if notice:
+        st.sidebar.info(str(notice))
+    if client is None:
+        st.sidebar.caption(
+            "تسجيل الدخول غير مفعّل بعد. أضف SUPABASE_URL وSUPABASE_PUBLISHABLE_KEY إلى Secrets."
+        )
+        return
+
+    session = current_auth_session(client)
+    if session is not None:
+        email = str(session.user.get("email") or "مستخدم موثّق")
+        st.sidebar.success("مسجل الدخول")
+        st.sidebar.caption(email)
+        if st.sidebar.button("تسجيل الخروج", key="qareena_sign_out", width="stretch"):
+            try:
+                client.sign_out(session.access_token)
+            except AuthError:
+                pass
+            clear_authenticated_user_state()
+            st.session_state["qareena_auth_notice"] = "تم تسجيل الخروج من هذا الجهاز."
+            st.rerun()
+        return
+
+    pending_email = str(st.session_state.get("qareena_auth_pending_email") or "")
+    if not pending_email:
+        st.session_state.pop("qareena_auth_otp", None)
+    with st.sidebar.expander("تسجيل الدخول بالبريد", expanded=bool(pending_email)):
+        email = st.text_input(
+            "البريد الإلكتروني",
+            key="qareena_auth_email",
+            placeholder="name@company.com",
+        )
+        if st.button("إرسال رمز الدخول", key="qareena_send_otp", width="stretch"):
+            try:
+                normalized_email = client.send_email_otp(email, create_user=True)
+                st.session_state["qareena_auth_pending_email"] = normalized_email
+                st.session_state["qareena_auth_notice"] = (
+                    "أُرسل رمز من 6 أرقام إلى بريدك. تنتهي صلاحيته حسب إعدادات Supabase."
+                )
+                st.rerun()
+            except AuthError as exc:
+                st.error(str(exc))
+
+        if pending_email:
+            st.caption(f"أدخل الرمز المرسل إلى {pending_email}")
+            otp = st.text_input(
+                "رمز التحقق",
+                type="password",
+                max_chars=6,
+                key="qareena_auth_otp",
+                placeholder="000000",
+            )
+            if st.button("تحقق وسجّل الدخول", key="qareena_verify_otp", type="primary", width="stretch"):
+                try:
+                    verified = client.verify_email_otp(pending_email, otp)
+                    st.session_state["qareena_auth_session"] = verified.as_dict()
+                    st.session_state.pop("qareena_auth_pending_email", None)
+                    st.session_state["qareena_auth_notice"] = "تم تسجيل الدخول بنجاح."
+                    st.rerun()
+                except AuthError as exc:
+                    st.error(str(exc))
+
+            if st.button("تغيير البريد", key="qareena_change_auth_email", width="stretch"):
+                st.session_state.pop("qareena_auth_pending_email", None)
+                st.rerun()
 
 
 def ensure_app_columns(data: pd.DataFrame) -> pd.DataFrame:
@@ -2586,6 +2729,8 @@ def render_user_profile_selector() -> UserProfile:
     )
     st.sidebar.caption(BRAND_TAGLINE)
     st.sidebar.divider()
+    render_auth_sidebar()
+    st.sidebar.divider()
     st.sidebar.markdown("### وضع الاستخدام")
     labels = user_profile_labels()
     selected_label = st.sidebar.selectbox(
@@ -3208,16 +3353,30 @@ def render_developer_decision_lab(
             )
 
         st.markdown("#### الحفظ الدائم في Supabase")
-        st.caption(
-            "استخدم رمز مساحة عمل من 8 أحرف أو أكثر. لا يُحفظ الرمز نفسه؛ تُحفظ بصمته فقط. "
-            "استخدم الرمز نفسه على أي جهاز لاسترجاع المشاريع، وشاركه فقط مع أعضاء الفريق المصرح لهم."
-        )
-        workspace_code = st.text_input(
-            "رمز مساحة العمل",
-            type="password",
-            key="developer_workspace_code",
-            placeholder="مثال: qareena-team-2026",
-        )
+        authenticated_user = current_authenticated_user()
+        use_legacy_workspace = False
+        if authenticated_user is not None:
+            user_email = str(authenticated_user.get("email") or "الحساب الحالي")
+            st.success(f"المساحة الشخصية مرتبطة بحساب {user_email}.")
+            use_legacy_workspace = st.checkbox(
+                "استخدام رمز مساحة مشتركة أو قديمة",
+                key="use_legacy_developer_workspace",
+                help="استخدمه مؤقتًا للوصول إلى مشاريع حُفظت قبل تفعيل الحسابات أو لمشاركة مساحة فريق.",
+            )
+        if authenticated_user is not None and not use_legacy_workspace:
+            workspace_code = personal_workspace_code(str(authenticated_user["id"]))
+            st.caption("لا تحتاج إلى حفظ رمز؛ تُستعاد مشاريعك تلقائيًا بعد تسجيل الدخول بالحساب نفسه.")
+        else:
+            st.caption(
+                "استخدم رمز مساحة عمل من 8 أحرف أو أكثر. لا يُحفظ الرمز نفسه؛ تُحفظ بصمته فقط. "
+                "سجّل الدخول لإنشاء مساحة شخصية أكثر أمانًا."
+            )
+            workspace_code = st.text_input(
+                "رمز مساحة العمل",
+                type="password",
+                key="developer_workspace_code",
+                placeholder="مثال: qareena-team-2026",
+            )
         cloud_save_col, cloud_load_col = st.columns(2)
         save_cloud = cloud_save_col.button(
             "حفظ أو تحديث في Supabase",

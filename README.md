@@ -77,7 +77,30 @@ python scripts/validate_release.py
 
 - Main file path: `app.py`
 - Python dependencies: `requirements.txt`
-- لا توجد أسرار مطلوبة حاليا.
+- أضف `DATABASE_URL` للحفظ الدائم في قاعدة البيانات.
+- أضف `SUPABASE_URL` و`SUPABASE_PUBLISHABLE_KEY` لتفعيل حسابات البريد وOTP.
+
+## تفعيل حسابات Supabase Auth
+
+انسخ القيم من Supabase ثم أضفها في Streamlit Cloud من **App settings > Secrets**:
+
+```toml
+SUPABASE_URL = "https://PROJECT_REF.supabase.co"
+SUPABASE_PUBLISHABLE_KEY = "sb_publishable_REPLACE_ME"
+```
+
+لا تستخدم `service_role` أو secret key في التطبيق. المفتاح المطلوب هنا هو **Publishable key**، ويمكن استخدام `SUPABASE_ANON_KEY` للمشاريع القديمة.
+
+لإرسال رمز رقمي بدل رابط الدخول:
+
+1. افتح Supabase ثم **Authentication > Email Templates**.
+2. افتح قالب **Magic Link**.
+3. اجعل محتوى الرسالة يتضمن `{{ .Token }}`، مثل: `<p>رمز دخول قرينة: {{ .Token }}</p>`.
+4. احفظ القالب، ثم جرّب تسجيل الدخول من الشريط الجانبي للتطبيق.
+
+الحساب المسجّل يحصل على مساحة شخصية تلقائيًا. يبقى رمز مساحة العمل متاحًا لاسترجاع المشاريع القديمة أو المساحات المشتركة. خدمة البريد الافتراضية في Supabase مناسبة للتجربة فقط؛ للإطلاق التجاري يلزم إعداد SMTP مخصص.
+
+التوثيق الرسمي: [Passwordless email logins](https://supabase.com/docs/guides/auth/auth-email-passwordless) و[Custom SMTP](https://supabase.com/docs/guides/auth/auth-smtp).
 
 ## بنية المشروع
 
