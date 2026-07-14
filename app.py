@@ -50,6 +50,22 @@ from real_estate_intel.catalog import REGA_OPEN_DATA_PAGE
 from real_estate_intel.data_engine import load_market_data, load_sale_market_data, warehouse_status
 from real_estate_intel.data_prep import load_rental_data, location_label
 from real_estate_intel.decision_support import rank_alternatives
+from real_estate_intel.developer_ai import (
+    DevelopmentAssumptions,
+    analyze_development,
+    answer_developer_question,
+    build_developer_brief,
+    optimize_for_target_margin,
+    project_snapshot,
+    recommend_product_mix,
+    stress_test_development,
+)
+from real_estate_intel.developer_projects import (
+    connect_developer_project_store,
+    load_developer_projects,
+    project_comparison_row,
+    save_developer_project,
+)
 from real_estate_intel.forecasting import forecast_market
 from real_estate_intel.official_sources import (
     metric_lineage_frame,
@@ -489,6 +505,11 @@ def get_warehouse_version_string() -> str:
         f"{status.get('type')}-{status.get('rows')}-{status.get('latest_period')}-"
         f"{status.get('sale_rows')}-{status.get('sale_latest_period')}"
     )
+
+
+@st.cache_resource(show_spinner=False)
+def get_developer_project_store():
+    return connect_developer_project_store()
 
 
 def ensure_app_columns(data: pd.DataFrame) -> pd.DataFrame:
@@ -2590,8 +2611,9 @@ def main() -> None:
         if user_profile.key in {"investor", "broker"}:
             render_riyadh_first_page(data, settings, sale_data)
         elif user_profile.key == "developer":
+            render_developer_ai(filtered, sale_data)
+            st.divider()
             render_kpis(filtered, settings, snapshot)
-            render_charts(filtered, settings, snapshot)
         else:
             render_ai_briefing(filtered, settings, snapshot)
             render_kpis(filtered, settings, snapshot)
@@ -2621,6 +2643,500 @@ def main() -> None:
 
     with platform_tab:
         render_platform_page()
+
+
+def render_developer_ai(market_data: pd.DataFrame, sale_data: pd.DataFrame) -> None:
+    st.markdown("## قرينة AI للمطور العقاري")
+    st.caption(
+        "محرك جدوى وتخطيط منتج قابل للتفسير: يربط افتراضات الأرض والبناء والبيع "
+        "بإشارات الطلب والإيجار، ثم يختبر المشروع تحت الضغط."
+    )
+
+
+    latest_index = int(market_data["period_index"].max())
+    latest = market_data[market_data["period_index"].eq(latest_index)].copy()
+    market_by_type = aggregate_market(latest, ["property_type"]).dropna(
+        subset=["average_rent", "total_deals"]
+    )
+    if market_by_type.empty:
+        st.info("لا توجد شريحة سوقية كافية لبناء دراسة تطوير في الفلتر الحالي.")
+        return
+
+    property_types = sorted(market_by_type["property_type"].astype(str).unique())
+    selected_type = st.selectbox(
+        "نوع المنتج الأساسي",
+        property_types,
+        key="developer_ai_property_type",
+    )
+    selected_market = market_by_type[market_by_type["property_type"].astype(str).eq(selected_type)].iloc[0]
+    annual_rent_benchmark = max(safe_float(selected_market["average_rent"], 0), 0)
+    sample_size = int(max(safe_float(selected_market["total_deals"], 0), 0))
+    demand_rank = float(
+        market_by_type["total_deals"].rank(pct=True).loc[selected_market.name]
+    )
+
+    sale_benchmark, sale_source = developer_sale_benchmark(
+        sale_data,
+        cities=latest["city_ar"].dropna().astype(str).unique().tolist(),
+        property_type=selected_type,
+    )
+
+    with st.expander("افتراضات المشروع", expanded=True):
+        first = st.columns(4)
+        land_area = first[0].number_input(
+            "مساحة الأرض (م²)", min_value=100.0, value=2_000.0, step=100.0, key="dev_land_area"
+        )
+        land_cost = first[1].number_input(
+            "سعر الأرض الإجمالي (ر.س)", min_value=0.0, value=4_000_000.0,
+            step=100_000.0, key="dev_land_cost"
+        )
+        floor_area_ratio = first[2].number_input(
+            "معامل البناء FAR", min_value=0.1, max_value=10.0, value=2.0,
+            step=0.1, key="dev_far"
+        )
+        efficiency = first[3].slider(
+            "كفاءة المساحة القابلة للبيع", 50, 95, 80, key="dev_efficiency"
+        )
+
+        second = st.columns(4)
+        unit_area = second[0].number_input(
+            "متوسط مساحة الوحدة (م²)", min_value=20.0, value=120.0,
+            step=5.0, key="dev_unit_area"
+        )
+        construction_cost = second[1].number_input(
+            "تكلفة البناء للمتر (ر.س)", min_value=0.0, value=2_200.0,
+            step=100.0, key="dev_construction_cost"
+        )
+        derived_sale_price = (
+            annual_rent_benchmark / 0.06 / max(float(unit_area), 1.0)
+            if annual_rent_benchmark > 0 else 0.0
+        )
+        default_sale_price = sale_benchmark if sale_benchmark > 0 else derived_sale_price
+        sale_price = second[2].number_input(
+            "سعر البيع المستهدف للمتر (ر.س)", min_value=0.0,
+            value=float(round(default_sale_price / 50) * 50), step=100.0,
+            key=f"dev_sale_price_{selected_type}"
+        )
+        annual_rent = second[3].number_input(
+            "الإيجار السنوي المتوقع للوحدة", min_value=0.0,
+            value=float(round(annual_rent_benchmark / 500) * 500), step=500.0,
+            key=f"dev_annual_rent_{selected_type}"
+        )
+
+        third = st.columns(4)
+        soft_cost = third[0].slider("التكاليف غير المباشرة %", 0, 30, 12, key="dev_soft")
+        contingency = third[1].slider("الاحتياطي %", 0, 25, 7, key="dev_contingency")
+        finance = third[2].slider("تكلفة التمويل %", 0, 30, 8, key="dev_finance")
+        target_margin = third[3].slider("هامش الربح المستهدف %", 5, 45, 20, key="dev_target_margin")
+
+        fourth = st.columns(3)
+        marketing = fourth[0].slider("التسويق والمبيعات %", 0, 15, 3, key="dev_marketing")
+        occupancy = fourth[1].slider("الإشغال المتوقع %", 50, 100, 90, key="dev_occupancy")
+        development_years = fourth[2].number_input(
+            "مدة التطوير (سنة)", min_value=0.5, max_value=10.0, value=2.0,
+            step=0.5, key="dev_years"
+        )
+
+        reference_text = (
+            f"مرجع البيع: {sale_source} بمتوسط {sale_benchmark:,.0f} ر.س/م²."
+            if sale_benchmark > 0
+            else "لا يوجد مؤشر بيع رسمي مطابق؛ القيمة الابتدائية مشتقة من الإيجار عند عائد إجمالي 6% ويجب تعديلها."
+        )
+        st.caption(
+            f"مرجع الإيجار: {annual_rent_benchmark:,.0f} ر.س سنويًا، "
+            f"وحجم الشريحة {sample_size:,.0f} عقد. {reference_text}"
+        )
+
+    assumptions = DevelopmentAssumptions(
+        land_area_sqm=float(land_area),
+        land_cost=float(land_cost),
+        floor_area_ratio=float(floor_area_ratio),
+        saleable_efficiency_pct=float(efficiency),
+        average_unit_area_sqm=float(unit_area),
+        construction_cost_per_sqm=float(construction_cost),
+        sale_price_per_sqm=float(sale_price),
+        annual_rent_per_unit=float(annual_rent),
+        occupancy_pct=float(occupancy),
+        soft_cost_pct=float(soft_cost),
+        contingency_pct=float(contingency),
+        marketing_pct=float(marketing),
+        finance_pct=float(finance),
+        development_years=float(development_years),
+        target_margin_pct=float(target_margin),
+        demand_rank=demand_rank,
+        market_sample_size=sample_size,
+    )
+    result = analyze_development(assumptions)
+    stress = stress_test_development(assumptions)
+    total_units = int(result["units"])
+    mix = recommend_product_mix(market_data, total_units=total_units)
+
+    decision_labels = {
+        "proceed": "دراسة تفصيلية مشروطة",
+        "redesign": "إعادة تصميم المشروع",
+        "reject": "عدم الالتزام حاليًا",
+    }
+    decision = decision_labels.get(str(result["decision"]), "مراجعة")
+    score = float(result["development_score"])
+    if score >= 72:
+        st.success(f"القرار: {decision} — درجة التطوير {score:.1f}/100 — الثقة {result['confidence']}")
+    elif score >= 52:
+        st.warning(f"القرار: {decision} — درجة التطوير {score:.1f}/100 — الثقة {result['confidence']}")
+    else:
+        st.error(f"القرار: {decision} — درجة التطوير {score:.1f}/100 — الثقة {result['confidence']}")
+
+    headline = st.columns(5)
+    headline[0].metric("الوحدات التقديرية", f"{total_units:,.0f}")
+    headline[1].metric("قيمة التطوير GDV", format_sar(float(result["sale_revenue"])))
+    headline[2].metric("التكلفة الكلية", format_sar(float(result["total_cost"])))
+    headline[3].metric("الربح المتوقع", format_sar(float(result["profit"])))
+    headline[4].metric("هامش الربح", f"{float(result['margin_pct']):.1f}%")
+
+    detail = st.columns(5)
+    detail[0].metric("العائد على التكلفة", f"{float(result['roi_pct']):.1f}%")
+    detail[1].metric("العائد السنوي التقريبي", f"{float(result['annualized_return_pct']):.1f}%")
+    detail[2].metric("Yield on Cost", f"{float(result['yield_on_cost_pct']):.1f}%")
+    detail[3].metric("سعر التعادل / م²", format_sar(float(result["break_even_sale_price_per_sqm"])))
+    detail[4].metric("أقصى عرض للأرض", format_sar(float(result["max_land_bid"])))
+
+    scenario_rows = pd.DataFrame(stress["scenarios"])
+    scenario_chart = px.bar(
+        scenario_rows,
+        x="label",
+        y="profit",
+        color="scenario",
+        text_auto=".2s",
+        title="ربح المشروع تحت ثلاثة سيناريوهات",
+        labels={"label": "السيناريو", "profit": "الربح (ر.س)", "scenario": "السيناريو"},
+        color_discrete_map={"downside": "#a73f54", "base": "#1c5d99", "upside": "#0b6b53"},
+    )
+    scenario_chart.update_layout(showlegend=False, yaxis_tickformat=",.0f")
+    st.plotly_chart(scenario_chart, width="stretch")
+
+    scenario_view = scenario_rows.rename(
+        columns={
+            "label": "السيناريو",
+            "revenue": "الإيراد",
+            "total_cost": "التكلفة",
+            "profit": "الربح",
+            "margin_pct": "الهامش %",
+            "roi_pct": "ROI %",
+            "development_score": "الدرجة",
+            "decision": "رمز القرار",
+        }
+    )
+    st.dataframe(
+        scenario_view[["السيناريو", "الإيراد", "التكلفة", "الربح", "الهامش %", "ROI %", "الدرجة"]],
+        hide_index=True,
+        width="stretch",
+    )
+
+    st.markdown("### المزيج التطويري المقترح")
+    st.caption("اقتراح أولي يوزع الوحدات حسب الطلب 50%، نمو الإيجار 30%، والقيمة الإيجارية 20%.")
+    if mix.empty:
+        st.info("لا توجد بيانات كافية لبناء مزيج منتجات.")
+    else:
+        mix_view = mix.rename(
+            columns={
+                "property_type": "نوع المنتج",
+                "allocation_pct": "النسبة %",
+                "recommended_units": "الوحدات",
+                "average_rent": "متوسط الإيجار",
+                "total_deals": "العقود",
+                "growth_pct": "نمو الإيجار %",
+                "market_score": "درجة السوق",
+                "reason": "سبب الترشيح",
+            }
+        )
+        st.dataframe(mix_view, hide_index=True, width="stretch")
+
+    brief = build_developer_brief(result, stress, mix)
+    with st.container(border=True):
+        st.markdown(brief)
+    st.download_button(
+        "تحميل مذكرة المطور",
+        data=brief,
+        file_name="qareena-developer-ai-brief.md",
+        mime="text/markdown",
+        key="download_developer_ai_brief",
+    )
+    render_developer_decision_lab(assumptions, result, stress, mix, selected_type)
+
+
+def render_developer_decision_lab(
+    assumptions: DevelopmentAssumptions,
+    result: dict[str, object],
+    stress: dict[str, object],
+    mix: pd.DataFrame,
+    selected_type: str,
+) -> None:
+    st.divider()
+    st.markdown("## مختبر قرارات المطور")
+    optimization_tab, assistant_tab, portfolio_tab = st.tabs(
+        ["تحسين الهامش", "اسأل قرينة AI", "مقارنة المشاريع"]
+    )
+
+    with optimization_tab:
+        target_margin = st.slider(
+            "الهامش المطلوب %",
+            min_value=5,
+            max_value=45,
+            value=int(round(assumptions.target_margin_pct)),
+            key=f"developer_optimizer_target_{selected_type}",
+        )
+        optimization = optimize_for_target_margin(assumptions, float(target_margin))
+        current_margin = float(optimization["current_margin_pct"])
+        if current_margin >= target_margin:
+            st.success(
+                f"المشروع يحقق الهامش المطلوب حاليًا: {current_margin:.1f}% مقابل هدف {target_margin:.1f}%."
+            )
+        else:
+            st.warning(
+                f"فجوة الهامش {target_margin - current_margin:.1f} نقطة. "
+                "الخيارات التالية تحسب كل رافعة منفردة مع ثبات بقية الافتراضات."
+            )
+
+        levers = pd.DataFrame(optimization["levers"])
+        lever_view = levers.rename(
+            columns={
+                "lever": "الرافعة",
+                "current": "الحالي",
+                "required": "المطلوب",
+                "change": "التغيير",
+                "change_pct": "التغيير %",
+                "unit": "الوحدة",
+                "action": "الإجراء المقترح",
+            }
+        )
+        st.dataframe(
+            lever_view[["الرافعة", "الحالي", "المطلوب", "التغيير", "التغيير %", "الوحدة", "الإجراء المقترح"]],
+            hide_index=True,
+            width="stretch",
+        )
+        best = levers.iloc[0]
+        st.info(
+            f"أقرب رافعة منفردة نسبيًا: **{best['action']}** "
+            f"(تغيير {abs(float(best['change_pct'])):.1f}%). يمكن دمج أكثر من رافعة لتقليل المخاطرة."
+        )
+
+    with assistant_tab:
+        st.caption(
+            "اسأل بلغة طبيعية عن الهامش، سعر الأرض، سعر البيع، تكلفة البناء، المزيج أو المخاطر. "
+            "الإجابة محسوبة من افتراضات المشروع ولا تستخدم نموذجًا مدفوعًا."
+        )
+        question = st.text_input(
+            "سؤالك",
+            value="كيف أصل إلى هامش 25%؟",
+            key=f"developer_ai_question_{selected_type}",
+        )
+        if st.button("حلّل السؤال", type="primary", key=f"ask_developer_ai_{selected_type}"):
+            st.session_state["developer_ai_answer"] = answer_developer_question(
+                question,
+                assumptions,
+                result,
+                stress,
+                mix,
+            )
+        answer = st.session_state.get("developer_ai_answer")
+        if answer:
+            with st.container(border=True):
+                st.markdown(f"### إجابة قرينة\n\n{answer}")
+        st.markdown(
+            "**أمثلة:** ما أعلى سعر للأرض؟ · كم يجب أن يكون سعر البيع؟ · "
+            "ماذا يحدث في السيناريو المتحفظ؟ · ما المزيج المناسب للوحدات؟"
+        )
+
+    with portfolio_tab:
+        st.caption("احفظ نسخًا من الافتراضات الحالية وقارن أفضل مشروع وفق الربح والهامش والمرونة.")
+        project_name = st.text_input(
+            "اسم المشروع أو الأرض",
+            value=f"مشروع {selected_type}",
+            key=f"developer_project_name_{selected_type}",
+        )
+        save_col, clear_col = st.columns([2, 1])
+        if save_col.button(
+            "حفظ المشروع للمقارنة",
+            type="primary",
+            key=f"save_developer_project_{selected_type}",
+            width="stretch",
+        ):
+            projects = st.session_state.setdefault("developer_project_snapshots", {})
+            projects[str(project_name).strip() or f"مشروع {len(projects) + 1}"] = project_snapshot(
+                project_name,
+                assumptions,
+                result,
+                stress,
+            )
+            st.success("تم حفظ نسخة المشروع داخل جلسة العمل الحالية.")
+        if clear_col.button(
+            "مسح المقارنة",
+            key="clear_developer_projects",
+            width="stretch",
+        ):
+            st.session_state["developer_project_snapshots"] = {}
+
+        projects = st.session_state.get("developer_project_snapshots", {})
+        if not projects:
+            st.info("احفظ مشروعين أو أكثر لتظهر المقارنة والترتيب.")
+        else:
+            comparison = pd.DataFrame(projects.values()).copy()
+            comparison["rank"] = comparison["development_score"].rank(
+                method="min", ascending=False
+            ).astype(int)
+            comparison = comparison.sort_values(
+                ["development_score", "downside_profit", "profit"],
+                ascending=False,
+            )
+            decision_labels = {
+                "proceed": "دراسة تفصيلية",
+                "redesign": "إعادة تصميم",
+                "reject": "رفض حالي",
+            }
+            comparison["decision"] = comparison["decision"].map(decision_labels).fillna(
+                comparison["decision"]
+            )
+            comparison_view = comparison.rename(
+                columns={
+                    "rank": "الترتيب",
+                    "project": "المشروع",
+                    "land_area_sqm": "مساحة الأرض",
+                    "land_cost": "سعر الأرض",
+                    "units": "الوحدات",
+                    "sale_revenue": "GDV",
+                    "total_cost": "التكلفة",
+                    "profit": "الربح",
+                    "margin_pct": "الهامش %",
+                    "roi_pct": "ROI %",
+                    "annualized_return_pct": "العائد السنوي %",
+                    "development_score": "الدرجة",
+                    "decision": "القرار",
+                    "downside_profit": "ربح المتحفظ",
+                    "max_land_bid": "أقصى عرض للأرض",
+                }
+            )
+            st.dataframe(comparison_view, hide_index=True, width="stretch")
+            winner = comparison.iloc[0]
+            st.success(
+                f"الأفضل حاليًا: {winner['project']} بدرجة {float(winner['development_score']):.1f}/100، "
+                f"هامش {float(winner['margin_pct']):.1f}%، وربح متحفظ {float(winner['downside_profit']):,.0f} ر.س."
+            )
+            st.download_button(
+                "تحميل مقارنة المشاريع CSV",
+                data=comparison_view.to_csv(index=False).encode("utf-8-sig"),
+                file_name="qareena-developer-projects.csv",
+                mime="text/csv",
+                key="download_developer_projects",
+            )
+
+        st.markdown("#### الحفظ الدائم في Supabase")
+        st.caption(
+            "استخدم رمز مساحة عمل من 8 أحرف أو أكثر. لا يُحفظ الرمز نفسه؛ تُحفظ بصمته فقط. "
+            "استخدم الرمز نفسه على أي جهاز لاسترجاع المشاريع، وشاركه فقط مع أعضاء الفريق المصرح لهم."
+        )
+        workspace_code = st.text_input(
+            "رمز مساحة العمل",
+            type="password",
+            key="developer_workspace_code",
+            placeholder="مثال: qareena-team-2026",
+        )
+        cloud_save_col, cloud_load_col = st.columns(2)
+        save_cloud = cloud_save_col.button(
+            "حفظ دائم في Supabase",
+            key=f"save_developer_project_cloud_{selected_type}",
+            width="stretch",
+        )
+        load_cloud = cloud_load_col.button(
+            "استرجاع مشاريع Supabase",
+            key="load_developer_projects_cloud",
+            width="stretch",
+        )
+
+        if save_cloud:
+            if len(workspace_code.strip()) < 8:
+                st.error("اكتب رمز مساحة عمل لا يقل عن 8 أحرف.")
+            else:
+                try:
+                    store = get_developer_project_store()
+                    if store is None:
+                        st.warning("الحفظ الدائم غير متاح لأن DATABASE_URL غير مهيأ في Streamlit Secrets.")
+                    else:
+                        save_developer_project(
+                            store,
+                            workspace_code=workspace_code,
+                            project_name=project_name,
+                            property_type=selected_type,
+                            assumptions=assumptions,
+                            result=result,
+                            stress=stress,
+                        )
+                        projects = st.session_state.setdefault("developer_project_snapshots", {})
+                        projects[str(project_name).strip()] = project_snapshot(
+                            project_name, assumptions, result, stress
+                        )
+                        st.success("تم حفظ المشروع بصورة دائمة في Supabase.")
+                except ValueError as exc:
+                    st.error(str(exc))
+                except Exception:
+                    st.error("تعذر حفظ المشروع في Supabase. تحقق من الاتصال وإنشاء الجدول.")
+
+        if load_cloud:
+            if len(workspace_code.strip()) < 8:
+                st.error("اكتب رمز مساحة العمل المستخدم عند الحفظ.")
+            else:
+                try:
+                    store = get_developer_project_store()
+                    if store is None:
+                        st.warning("الاسترجاع غير متاح لأن DATABASE_URL غير مهيأ في Streamlit Secrets.")
+                    else:
+                        cloud_projects = load_developer_projects(
+                            store,
+                            workspace_code=workspace_code,
+                        )
+                        session_projects = st.session_state.setdefault(
+                            "developer_project_snapshots", {}
+                        )
+                        for cloud_project in cloud_projects:
+                            row = project_comparison_row(cloud_project)
+                            session_projects[str(row["project"])] = row
+                        if cloud_projects:
+                            st.success(f"تم استرجاع {len(cloud_projects):,.0f} مشروع من Supabase.")
+                            st.rerun()
+                        else:
+                            st.info("لا توجد مشاريع محفوظة بهذا الرمز.")
+                except ValueError as exc:
+                    st.error(str(exc))
+                except Exception:
+                    st.error("تعذر قراءة المشاريع من Supabase. تحقق من الاتصال وإنشاء الجدول.")
+
+
+def developer_sale_benchmark(
+    sale_data: pd.DataFrame,
+    *,
+    cities: list[str],
+    property_type: str,
+) -> tuple[float, str]:
+    if sale_data.empty:
+        return 0.0, ""
+    candidates = sale_data.copy()
+    if cities:
+        candidates = candidates[candidates["city_ar"].astype(str).isin(cities)]
+    candidates = candidates[candidates["property_type"].astype(str).eq(str(property_type))]
+    if candidates.empty:
+        return 0.0, ""
+    latest_period = int(candidates["period_index"].max())
+    latest = candidates[candidates["period_index"].eq(latest_period)].dropna(
+        subset=["average_price_per_sqm"]
+    )
+    if latest.empty:
+        return 0.0, ""
+    weights = pd.to_numeric(latest.get("deed_count", 0), errors="coerce").fillna(0).clip(lower=0)
+    prices = pd.to_numeric(latest["average_price_per_sqm"], errors="coerce")
+    if weights.sum() > 0:
+        value = float((prices * weights).sum() / weights.sum())
+    else:
+        value = float(prices.median())
+    period = str(latest.iloc[0].get("period", "آخر فترة"))
+    return value, f"مؤشرات البيع الرسمية ({period})"
 
 
 def render_empty_state() -> None:
