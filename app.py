@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from html import escape
 import re
 import sys
@@ -127,7 +128,7 @@ st.markdown(
         align-items: center;
         gap: .9rem;
     }
-    .brand-lockup svg { width: 64px; height: 64px; flex: 0 0 auto; }
+    .brand-lockup img { width: 64px; height: 64px; flex: 0 0 auto; }
     .brand-lockup small {
         display: block;
         color: var(--teal);
@@ -505,6 +506,12 @@ def ensure_app_columns(data: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
+def brand_logo_data_uri() -> str:
+    logo_bytes = (ROOT / "assets" / "brand" / "qareena-mark.svg").read_bytes()
+    encoded = base64.b64encode(logo_bytes).decode("ascii")
+    return f"data:image/svg+xml;base64,{encoded}"
+
+
 def render_digital_header(data: pd.DataFrame) -> None:
     latest_text = period_label(data) if not data.empty else "-"
     records = f"{len(data):,.0f}"
@@ -512,12 +519,12 @@ def render_digital_header(data: pd.DataFrame) -> None:
     cities = f"{data['city_ar'].nunique():,.0f}" if "city_ar" in data else "0"
     sources = f"{data['dataset_id'].nunique():,.0f}" if "dataset_id" in data else "0"
 
-    logo_svg = (ROOT / "assets" / "brand" / "qareena-mark.svg").read_text(encoding="utf-8")
+    logo_uri = brand_logo_data_uri()
     st.markdown(
         f"""
         <section class="digital-header">
             <div class="brand-lockup">
-                {logo_svg}
+                <img src="{logo_uri}" alt="شعار {escape(BRAND_NAME_AR)}" />
                 <div>
                     <small>{escape(BRAND_NAME_EN)}</small>
                     <h1>{escape(BRAND_NAME_AR)}</h1>
@@ -2464,9 +2471,9 @@ def scope_narrative(data: pd.DataFrame) -> str:
 
 
 def render_user_profile_selector() -> UserProfile:
-    logo_svg = (ROOT / "assets" / "brand" / "qareena-mark.svg").read_text(encoding="utf-8")
+    logo_uri = brand_logo_data_uri()
     st.sidebar.markdown(
-        f'<div class="brand-lockup">{logo_svg}<div><small>{escape(BRAND_NAME_EN)}</small><strong>{escape(BRAND_NAME_AR)}</strong></div></div>',
+        f'<div class="brand-lockup"><img src="{logo_uri}" alt="شعار {escape(BRAND_NAME_AR)}" /><div><small>{escape(BRAND_NAME_EN)}</small><strong>{escape(BRAND_NAME_AR)}</strong></div></div>',
         unsafe_allow_html=True,
     )
     st.sidebar.caption(BRAND_TAGLINE)
