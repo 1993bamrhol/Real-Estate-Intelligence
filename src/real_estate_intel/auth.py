@@ -220,20 +220,44 @@ def personal_workspace_code(user_id: str) -> str:
 
 
 def _safe_error(response: requests.Response, fallback: str) -> str:
-    if response.status_code == 429:
-        return "تم طلب رموز كثيرة. انتظر دقيقة ثم أعد المحاولة."
     try:
         payload = response.json()
     except ValueError:
+        if response.status_code in (401, 403, 404):
+            return "رفض Supabase بيانات الاتصال. تحقق من SUPABASE_URL وPublishable key."
         return fallback
+    error_code = str(payload.get("error_code") or payload.get("code") or "").strip().lower()
+    code_messages = {
+        "email_address_not_authorized": (
+            "خدمة البريد التجريبية لا تسمح بهذا البريد. استخدم بريد عضو في فريق Supabase "
+            "أو فعّل Custom SMTP."
+        ),
+        "email_address_invalid": "عنوان البريد مرفوض من Supabase. استخدم بريدًا حقيقيًا غير تجريبي.",
+        "email_provider_disabled": "تسجيل الدخول بالبريد غير مفعّل في Authentication > Providers.",
+        "otp_disabled": "تسجيل الدخول برمز OTP غير مفعّل في إعدادات Supabase Auth.",
+        "over_email_send_rate_limit": "تجاوزت حد إرسال البريد. انتظر قبل طلب رمز جديد.",
+        "over_request_rate_limit": "تجاوزت حد الطلبات. انتظر عدة دقائق ثم أعد المحاولة.",
+        "signup_disabled": "إنشاء المستخدمين الجدد معطّل في إعدادات Supabase Auth.",
+        "request_timeout": "تأخر Supabase في معالجة الطلب. أعد المحاولة بعد قليل.",
+        "unexpected_failure": "خدمة Supabase Auth واجهت خطأ داخليًا. راجع Auth Logs.",
+        "validation_failed": "رفض Supabase بيانات الطلب. تحقق من رابط المشروع والمفتاح والبريد.",
+    }
+    if error_code in code_messages:
+        return f"{code_messages[error_code]} ({error_code})"
+    if response.status_code == 429:
+        return "تم طلب رموز كثيرة. انتظر دقيقة ثم أعد المحاولة."
     raw = " ".join(
         str(payload.get(key) or "")
         for key in ("code", "error", "error_code", "msg", "message", "error_description")
     ).lower()
     if any(word in raw for word in ("expired", "invalid token", "otp_expired", "token has expired")):
         return "رمز التحقق غير صحيح أو انتهت صلاحيته."
-    if "email" in raw and any(word in raw for word in ("invalid", "not allowed", "unable to validate")):
+    if "email" in raw and any(
+        word in raw for word in ("invalid", "not allowed", "not authorized", "unable to validate")
+    ):
         return "تعذر استخدام هذا البريد. تحقق منه أو راجع إعدادات البريد في Supabase."
+    if response.status_code in (401, 403, 404):
+        return "رفض Supabase بيانات الاتصال. تحقق من SUPABASE_URL وPublishable key."
     return fallback
 
 

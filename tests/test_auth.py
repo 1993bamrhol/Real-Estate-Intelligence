@@ -117,6 +117,26 @@ class SupabaseAuthTests(unittest.TestCase):
         with self.assertRaisesRegex(AuthError, "تعذر الاتصال"):
             self.client.send_email_otp("user@example.com")
 
+    def test_auth_error_codes_explain_configuration_problem(self) -> None:
+        cases = (
+            (403, "email_address_not_authorized", "Custom SMTP"),
+            (400, "email_provider_disabled", "Providers"),
+            (400, "otp_disabled", "OTP"),
+            (429, "over_email_send_rate_limit", "حد إرسال"),
+            (500, "unexpected_failure", "Auth Logs"),
+        )
+        for status, code, expected in cases:
+            with self.subTest(code=code):
+                self.http.request.side_effect = None
+                self.http.request.return_value = response(status, {"error_code": code})
+                with self.assertRaisesRegex(AuthError, expected):
+                    self.client.send_email_otp("user@example.com")
+
+    def test_invalid_project_credentials_have_safe_message(self) -> None:
+        self.http.request.return_value = response(401, {"message": "Invalid API key"})
+        with self.assertRaisesRegex(AuthError, "SUPABASE_URL"):
+            self.client.send_email_otp("user@example.com")
+
     def test_identity_helpers_validate_input(self) -> None:
         self.assertEqual(normalize_email("A@Example.com"), "a@example.com")
         self.assertEqual(personal_workspace_code(USER_ID), f"qareena-user:{USER_ID}")
