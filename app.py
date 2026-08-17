@@ -92,6 +92,8 @@ from real_estate_intel.user_profiles import (
     user_profile_key_from_label,
     user_profile_labels,
 )
+from real_estate_intel.neighborhood_interface import render_neighborhood_report_page
+from real_estate_intel.riyadh_map_viewer import render_riyadh_map_page
 
 st.set_page_config(page_title=f"{BRAND_NAME_AR} | {BRAND_TAGLINE}", page_icon="📊", layout="wide")
 
@@ -2835,8 +2837,8 @@ def main() -> None:
     snapshot = build_market_snapshot(filtered, settings)
     settings["user_profile"] = user_profile.key
     render_user_profile_overview(user_profile)
-    decision_tab, analyst_tab, market_tab, data_tab, platform_tab = st.tabs(
-        [*list(user_profile.tab_labels), "المنصة"]
+    decision_tab, analyst_tab, market_tab, data_tab, neighborhood_tab, riyadh_map_tab, platform_tab = st.tabs(
+        [*list(user_profile.tab_labels), "📋 تقرير المخطط", "🗺️ خريطة الرياض", "المنصة"]
     )
 
     with decision_tab:
@@ -2872,6 +2874,12 @@ def main() -> None:
         render_data_quality(filtered)
         with st.expander("البيانات الموحدة", expanded=False):
             render_data_table(filtered, nested=True)
+
+    with neighborhood_tab:
+        render_neighborhood_report_page()
+
+    with riyadh_map_tab:
+        render_riyadh_map_page()
 
     with platform_tab:
         render_platform_page()
