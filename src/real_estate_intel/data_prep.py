@@ -63,6 +63,16 @@ OUTPUT_COLUMNS = [
     "average_rent",
 ]
 
+RENTAL_BUSINESS_KEY = [
+    "year",
+    "quarter",
+    "region_ar",
+    "city_ar",
+    "district_ar",
+    "property_type",
+    "property_class",
+]
+
 
 def load_catalog(path: Path = CATALOG_PATH) -> dict[str, Any]:
     if not path.exists():
@@ -114,7 +124,7 @@ def load_rental_data(
     data["location_ar"] = data.apply(location_label, axis=1)
     data["period_index"] = data["year"] * 4 + data["quarter"]
     data["period"] = data["year"].astype(str) + " Q" + data["quarter"].astype(str)
-    return data
+    return deduplicate_rental_observations(data)
 
 
 def load_snapshot(path: Path = SNAPSHOT_PATH) -> pd.DataFrame:
@@ -136,7 +146,46 @@ def load_snapshot(path: Path = SNAPSHOT_PATH) -> pd.DataFrame:
         data["period_index"] = data["year"].astype("int64") * 4 + data["quarter"].astype("int64")
     if "period" not in data.columns and {"year", "quarter"}.issubset(data.columns):
         data["period"] = data["year"].astype(str) + " Q" + data["quarter"].astype(str)
-    return data
+    return deduplicate_rental_observations(data)
+
+
+def deduplicate_rental_observations(data: pd.DataFrame) -> pd.DataFrame:
+    """Return one governed row per rental business key.
+
+    REGA extracts can overlap across published datasets. The newest source update
+    wins; dataset and resource IDs are deterministic tie-breakers. Conflict and
+    overlap metadata remain on the retained row for auditability.
+    """
+    if data.empty or not set(RENTAL_BUSINESS_KEY).issubset(data.columns):
+        return data.copy()
+
+    work = data.copy()
+    for column in ["district_ar", "property_class", "dataset_id", "resource_id"]:
+        if column not in work.columns:
+            work[column] = ""
+        work[column] = work[column].fillna("").astype(str).str.strip()
+
+    if "source_updated_at" not in work.columns:
+        work["source_updated_at"] = ""
+    work["source_updated_at"] = work["source_updated_at"].fillna("").astype(str)
+    work["_source_updated_sort"] = pd.to_datetime(
+        work["source_updated_at"], errors="coerce", utc=True
+    )
+
+    grouped = work.groupby(RENTAL_BUSINESS_KEY, dropna=False)
+    work["source_overlap_count"] = grouped["average_rent"].transform("size").astype("int64")
+    rent_values = grouped["average_rent"].transform("nunique")
+    deal_values = grouped["total_deals"].transform("nunique")
+    work["source_measure_conflict"] = rent_values.gt(1) | deal_values.gt(1)
+
+    work = work.sort_values(
+        [*RENTAL_BUSINESS_KEY, "_source_updated_sort", "dataset_id", "resource_id"],
+        ascending=[True] * len(RENTAL_BUSINESS_KEY) + [False, True, True],
+        na_position="last",
+        kind="mergesort",
+    )
+    work = work.drop_duplicates(RENTAL_BUSINESS_KEY, keep="first")
+    return work.drop(columns=["_source_updated_sort"]).reset_index(drop=True)
 
 
 def normalize_rental_frame(frame: pd.DataFrame) -> pd.DataFrame:

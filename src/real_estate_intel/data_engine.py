@@ -10,7 +10,8 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
-from real_estate_intel.analytics import aggregate_market, opportunity_scores
+from real_estate_intel.analytics import aggregate_market, entity_period_market, opportunity_scores
+from real_estate_intel.data_prep import deduplicate_rental_observations
 from real_estate_intel.official_sources import metric_lineage_frame, official_sources_frame
 from real_estate_intel.sales import load_sale_snapshot, prepare_sale_market
 
@@ -163,22 +164,25 @@ def build_sqlite_warehouse(
     metric_lineage = metric_lineage_frame()
 
     engine = create_engine(f"sqlite:///{db_path}")
-    with engine.connect() as connection:
-        with connection.begin():
-            clean.to_sql(CLEAN_TABLE, connection, if_exists="replace", index=False)
-            signals.to_sql(SIGNALS_TABLE, connection, if_exists="replace", index=False)
-            quality.to_sql(QUALITY_TABLE, connection, if_exists="replace", index=False)
-            source_registry.to_sql(SOURCE_REGISTRY_TABLE, connection, if_exists="replace", index=False)
-            metric_lineage.to_sql(METRIC_LINEAGE_TABLE, connection, if_exists="replace", index=False)
-            sales.to_sql(SALE_TABLE, connection, if_exists="replace", index=False)
-            connection.execute(text(f"create index if not exists idx_clean_period_city on {CLEAN_TABLE}(period_index, city_ar)"))
-            connection.execute(text(f"create index if not exists idx_clean_location on {CLEAN_TABLE}(location_ar)"))
-            connection.execute(text(f"create index if not exists idx_signals_entity on {SIGNALS_TABLE}(location_ar, property_type)"))
-            connection.execute(text(f"create index if not exists idx_sales_lookup on {SALE_TABLE}(city_ar, location_ar, property_type, period_index)"))
+    try:
+        with engine.connect() as connection:
+            with connection.begin():
+                clean.to_sql(CLEAN_TABLE, connection, if_exists="replace", index=False)
+                signals.to_sql(SIGNALS_TABLE, connection, if_exists="replace", index=False)
+                quality.to_sql(QUALITY_TABLE, connection, if_exists="replace", index=False)
+                source_registry.to_sql(SOURCE_REGISTRY_TABLE, connection, if_exists="replace", index=False)
+                metric_lineage.to_sql(METRIC_LINEAGE_TABLE, connection, if_exists="replace", index=False)
+                sales.to_sql(SALE_TABLE, connection, if_exists="replace", index=False)
+                connection.execute(text(f"create index if not exists idx_clean_period_city on {CLEAN_TABLE}(period_index, city_ar)"))
+                connection.execute(text(f"create index if not exists idx_clean_location on {CLEAN_TABLE}(location_ar)"))
+                connection.execute(text(f"create index if not exists idx_signals_entity on {SIGNALS_TABLE}(location_ar, property_type)"))
+                connection.execute(text(f"create index if not exists idx_sales_lookup on {SALE_TABLE}(city_ar, location_ar, property_type, period_index)"))
+    finally:
+        engine.dispose()
 
 
 def prepare_clean_market(source: pd.DataFrame) -> pd.DataFrame:
-    clean = source.copy()
+    clean = deduplicate_rental_observations(source)
     text_columns = [
         "region_ar",
         "city_ar",
@@ -216,30 +220,18 @@ def build_market_signals(clean: pd.DataFrame) -> pd.DataFrame:
     if clean.empty:
         return pd.DataFrame()
 
-    market = aggregate_market(
-        clean,
-        ["period_index", "period", "region_ar", "city_ar", "location_ar", "property_type"],
-    )
+    market = entity_period_market(clean)
     if market.empty:
         return market
 
-    market = market.sort_values(["region_ar", "city_ar", "location_ar", "property_type", "period_index"]).copy()
-    grouped = market.groupby(["region_ar", "city_ar", "location_ar", "property_type"], dropna=False)
-    market["previous_period"] = grouped["period"].shift(1)
-    market["previous_average_rent"] = grouped["average_rent"].shift(1)
-    market["previous_total_deals"] = grouped["total_deals"].shift(1)
-    market["rent_growth_pct"] = (
-        (market["average_rent"] - market["previous_average_rent"])
-        / market["previous_average_rent"]
-        * 100
-    )
-    market.loc[market["previous_average_rent"].le(0), "rent_growth_pct"] = pd.NA
+    market = market.rename(columns={"growth_pct": "rent_growth_pct"})
     market["deals_growth_pct"] = (
         (market["total_deals"] - market["previous_total_deals"])
         / market["previous_total_deals"]
         * 100
     )
-    market.loc[market["previous_total_deals"].le(0), "deals_growth_pct"] = pd.NA
+    invalid_comparison = market["previous_total_deals"].le(0) | market["period_gap"].ne(1)
+    market.loc[invalid_comparison, "deals_growth_pct"] = pd.NA
     return market
 
 

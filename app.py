@@ -764,16 +764,16 @@ def build_market_snapshot(data: pd.DataFrame, settings: dict[str, object]) -> di
 
 def confidence_status(latest_data: pd.DataFrame, min_deals: int) -> tuple[str, str, str]:
     if latest_data.empty:
-        return "منخفضة", "confidence-low", "لا توجد بيانات في آخر فترة ضمن الفلتر."
+        return "غير كافية", "confidence-low", "لا توجد بيانات في آخر فترة ضمن الفلتر."
 
     locations = latest_data["location_ar"].nunique()
     deals = latest_data["total_deals"].sum()
     property_types = latest_data["property_type"].nunique()
     if deals >= min_deals * 80 and locations >= 30 and property_types >= 5:
-        return "عالية", "confidence-high", "تغطية واسعة ومؤشرات كافية للمقارنة."
+        return "عالية", "confidence-high", "كفاية بيانات مرتفعة للمقارنة؛ لا تعبّر عن دقة تنبؤية."
     if deals >= min_deals * 25 and locations >= 10:
-        return "متوسطة", "confidence-medium", "التغطية جيدة، لكن بعض الشرائح تحتاج عقودا أكثر."
-    return "تحتاج تدعيم", "confidence-low", "الفلتر ضيق أو عدد العقود محدود في آخر فترة."
+        return "متوسطة", "confidence-medium", "كفاية البيانات جيدة، لكن بعض الشرائح تحتاج عقودًا أكثر."
+    return "تحتاج تدعيم", "confidence-low", "كفاية البيانات محدودة لأن الفلتر ضيق أو العقود قليلة."
 
 
 def render_ai_briefing(
@@ -822,7 +822,7 @@ def render_ai_briefing(
                 <p>الدرجة تجمع الطلب، النمو، وجاذبية السعر داخل الفلتر الحالي.</p>
                 <div class="signal-grid">
                     <div class="signal-mini">
-                        <b>ثقة القراءة</b>
+                        <b>كفاية البيانات</b>
                         <span class="{escape(confidence_class)}">{escape(confidence_label)}</span>
                     </div>
                     <div class="signal-mini">
@@ -2335,7 +2335,7 @@ def render_official_sources_status(data: pd.DataFrame) -> None:
                 "تقييم سعر شراء نهائي يحتاج دمج صفقات البيع والحدود الجغرافية الرسمية."
             )
         else:
-            st.warning("البيانات الحالية تحتاج تدعيم قبل استخدام التقرير كمنتج تجاري عالي الثقة.")
+            st.warning("البيانات الحالية تحتاج تدعيم قبل استخدام التقرير كمنتج تجاري واسع النطاق.")
 
     with st.expander("سجل المصادر الرسمية", expanded=False):
         view = sources.rename(
@@ -2346,7 +2346,6 @@ def render_official_sources_status(data: pd.DataFrame) -> None:
                 "status_ar": "الحالة",
                 "coverage_ar": "التغطية",
                 "used_for_ar": "الاستخدام في المنتج",
-                "trust_score": "درجة الثقة",
                 "url": "الرابط",
             }
         )
@@ -2359,7 +2358,6 @@ def render_official_sources_status(data: pd.DataFrame) -> None:
                     "الحالة",
                     "التغطية",
                     "الاستخدام في المنتج",
-                    "درجة الثقة",
                     "الرابط",
                 ]
             ],
@@ -2372,7 +2370,7 @@ def render_official_sources_status(data: pd.DataFrame) -> None:
             columns={
                 "indicator_ar": "المؤشر",
                 "source_ar": "المصدر",
-                "confidence_ar": "الثقة",
+                "classification_ar": "التصنيف المنهجي",
                 "method_ar": "طريقة الحساب",
                 "decision_use_ar": "استخدامه في القرار",
                 "limitation_ar": "حدود المؤشر",
@@ -3111,11 +3109,11 @@ def render_developer_ai(market_data: pd.DataFrame, sale_data: pd.DataFrame) -> N
     decision = decision_labels.get(str(result["decision"]), "مراجعة")
     score = float(result["development_score"])
     if score >= 72:
-        st.success(f"القرار: {decision} — درجة التطوير {score:.1f}/100 — الثقة {result['confidence']}")
+        st.success(f"القرار: {decision} — درجة التطوير {score:.1f}/100 — كفاية البيانات {result.get('data_sufficiency', result['confidence'])}")
     elif score >= 52:
-        st.warning(f"القرار: {decision} — درجة التطوير {score:.1f}/100 — الثقة {result['confidence']}")
+        st.warning(f"القرار: {decision} — درجة التطوير {score:.1f}/100 — كفاية البيانات {result.get('data_sufficiency', result['confidence'])}")
     else:
-        st.error(f"القرار: {decision} — درجة التطوير {score:.1f}/100 — الثقة {result['confidence']}")
+        st.error(f"القرار: {decision} — درجة التطوير {score:.1f}/100 — كفاية البيانات {result.get('data_sufficiency', result['confidence'])}")
 
     headline = st.columns(5)
     headline[0].metric("الوحدات التقديرية", f"{total_units:,.0f}")
@@ -3673,15 +3671,33 @@ def build_riyadh_property_scores(riyadh: pd.DataFrame, min_deals: int) -> pd.Dat
     market = market.sort_values(["neighborhood", "property_type", "period_index"]).copy()
     grouped = market.groupby(["neighborhood", "property_type"], dropna=False)
     market["previous_period"] = grouped["period"].shift(1)
+    market["previous_period_index"] = grouped["period_index"].shift(1)
+    market["period_gap"] = market["period_index"] - market["previous_period_index"]
     market["previous_average_rent"] = grouped["average_rent"].shift(1)
     market["previous_total_deals"] = grouped["total_deals"].shift(1)
     market["growth_pct"] = pct_series(market["average_rent"], market["previous_average_rent"])
     market["deals_growth_pct"] = pct_series(market["total_deals"], market["previous_total_deals"])
 
-    latest_period = market["period_index"].max()
+    invalid_comparison = market["period_gap"].ne(1) | market["previous_average_rent"].le(0)
+    market.loc[invalid_comparison, ["growth_pct", "deals_growth_pct"]] = pd.NA
+
+    eligible = market[
+        market["growth_pct"].notna()
+        & market["period_gap"].eq(1)
+        & (market["total_deals"] >= min_deals)
+        & (market["previous_total_deals"] >= min_deals)
+    ]
+    if eligible.empty:
+        return market.iloc[0:0].copy()
+    latest_period = eligible["period_index"].max()
     latest = market[market["period_index"] == latest_period].copy()
     latest = latest.dropna(subset=["average_rent", "total_deals"])
-    latest = latest[latest["total_deals"] >= min_deals].copy()
+    latest = latest[
+        latest["growth_pct"].notna()
+        & latest["period_gap"].eq(1)
+        & (latest["total_deals"] >= min_deals)
+        & (latest["previous_total_deals"] >= min_deals)
+    ].copy()
     if latest.empty:
         return latest
 
@@ -3703,10 +3719,13 @@ def build_riyadh_property_scores(riyadh: pd.DataFrame, min_deals: int) -> pd.Dat
     latest["deals_growth_pct"] = pd.to_numeric(latest["deals_growth_pct"], errors="coerce")
     latest["average_rent"] = pd.to_numeric(latest["average_rent"], errors="coerce")
     latest["total_deals"] = pd.to_numeric(latest["total_deals"], errors="coerce")
-    latest["demand_rank"] = latest["total_deals"].rank(pct=True)
-    latest["growth_rank"] = latest["growth_pct"].fillna(0).clip(lower=-50, upper=50).rank(pct=True)
-    latest["affordability_rank"] = 1 - latest["average_rent"].rank(pct=True)
-    volatility = latest["growth_pct"].fillna(0).abs().clip(lower=0, upper=80) / 80
+    cohort = latest.groupby("property_type", dropna=False)
+    latest["demand_rank"] = cohort["total_deals"].rank(pct=True)
+    latest["growth_rank"] = latest["growth_pct"].clip(lower=-50, upper=50).groupby(
+        latest["property_type"], dropna=False
+    ).rank(pct=True)
+    latest["affordability_rank"] = 1 - cohort["average_rent"].rank(pct=True)
+    volatility = latest["growth_pct"].abs().clip(lower=0, upper=80) / 80
     latest["risk_score"] = (latest["demand_rank"] * 65 + (1 - volatility) * 35).clip(lower=0, upper=100)
     latest["liquidity_score"] = latest["demand_rank"] * 100
     latest["property_score"] = (
@@ -3716,6 +3735,8 @@ def build_riyadh_property_scores(riyadh: pd.DataFrame, min_deals: int) -> pd.Dat
         + (latest["risk_score"] / 100) * 15
     ).clip(lower=0, upper=100)
     latest["score"] = latest["property_score"]
+    latest["score_classification"] = "Inference"
+    latest["score_cohort"] = "same_property_type_within_riyadh"
 
     # Add investor strategy scores to align with the main analytics module
     latest["investor_score_balanced"] = (
@@ -4036,7 +4057,7 @@ def build_investor_report(
     best = top.iloc[0]
     alerts = detect_market_signals(scores)
     average_score = safe_float(scores["property_score"].mean(), 0)
-    high_confidence = scores[scores["total_deals"] >= max(min_deals * 3, min_deals)]
+    high_sufficiency = scores[scores["total_deals"] >= max(min_deals * 3, min_deals)]
 
     lines = [
         "# تقرير المحلل العقاري - الرياض",
@@ -4048,7 +4069,7 @@ def build_investor_report(
             f"أفضل فرصة محسوبة حاليًا هي {best['neighborhood']} | {best['property_type']} "
             f"بدرجة {safe_float(best.get('property_score', 0)):,.1f}/100. "
             f"متوسط درجة الفرص داخل القائمة {average_score:,.1f}/100، "
-            f"وعدد الشرائح الأعلى ثقة من ناحية العقود {len(high_confidence):,.0f}."
+            f"وعدد الشرائح الأعلى كفاية من ناحية العقود {len(high_sufficiency):,.0f}."
         ),
         "",
         "## أفضل الفرص",
@@ -4076,9 +4097,9 @@ def build_investor_report(
             "## قرار أولي",
             investor_decision_text(best),
             "",
-            "## مصادر التقرير ومستوى الثقة",
+            "## مصادر التقرير وحدود الاستخدام",
             "المصدر النشط حالياً: الهيئة العامة للعقار - بيانات الإيجار المفتوحة، مع التحقق من الكتالوج عبر منصة البيانات المفتوحة الوطنية عند التحديث.",
-            "مستوى الثقة: عال لتحليل الإيجارات والعقود، ومتوسط لمؤشر الفرص لأنه مؤشر مشتق وليس تقييماً رسمياً.",
+            "التصنيف المنهجي: الإيجارات والعقود مؤشرات منشورة/محسوبة، ومؤشر الفرص استدلال نسبي وليس تقييمًا رسميًا.",
             "ما لا يغطيه التقرير بعد: صفقات البيع التفصيلية، سعر المتر، حدود الأحياء الجغرافية الرسمية، حالة العقار، والتمويل.",
             "",
             "## ملاحظة منهجية",
@@ -4462,7 +4483,7 @@ def render_property_valuation_engine(
         stress_a, stress_b, stress_c = st.columns(3)
         stress_a.metric("تحمل السيناريوهات", f"{stress_test['resilience_pct']:.0f}%")
         stress_b.metric("أقصى سعر شراء آمن", format_sar(float(stress_test["risk_adjusted_max_offer"])))
-        stress_c.metric("ثقة القرار", confidence_labels.get(str(stress_test["confidence"]), "منخفضة"))
+        stress_c.metric("كفاية بيانات القرار", confidence_labels.get(str(stress_test["confidence"]), "منخفضة"))
 
         scenario_rows = pd.DataFrame(stress_test["scenarios"])
         scenario_rows["القرار"] = scenario_rows["decision"].map(decision_labels)
@@ -4592,8 +4613,8 @@ def render_market_forecast(forecast: dict[str, object], district: str, property_
         f"{float(forecast['demand_change_pct']):+.1f}% خلال سنة",
     )
     metrics[2].metric(
-        "ثقة التوقع",
-        confidence_labels.get(str(forecast.get("confidence")), "منخفضة"),
+        "كفاية التاريخ",
+        confidence_labels.get(str(forecast.get("history_sufficiency", forecast.get("confidence"))), "منخفضة"),
         f"{int(forecast.get('periods_used', 0))} أرباع تاريخية",
     )
 

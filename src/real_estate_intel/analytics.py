@@ -130,6 +130,8 @@ def entity_period_market(frame: pd.DataFrame) -> pd.DataFrame:
     market = market.sort_values([*DEFAULT_ENTITY_COLUMNS, "period_index"]).copy()
     grouped = market.groupby(DEFAULT_ENTITY_COLUMNS, dropna=False)
     market["previous_period"] = grouped["period"].shift(1)
+    market["previous_period_index"] = grouped["period_index"].shift(1)
+    market["period_gap"] = market["period_index"] - market["previous_period_index"]
     market["previous_average_rent"] = grouped["average_rent"].shift(1)
     market["previous_total_deals"] = grouped["total_deals"].shift(1)
     market["growth_pct"] = (
@@ -137,7 +139,8 @@ def entity_period_market(frame: pd.DataFrame) -> pd.DataFrame:
         / market["previous_average_rent"]
         * 100
     )
-    market.loc[market["previous_average_rent"].le(0), "growth_pct"] = pd.NA
+    invalid_comparison = market["previous_average_rent"].le(0) | market["period_gap"].ne(1)
+    market.loc[invalid_comparison, "growth_pct"] = pd.NA
     return market
 
 
@@ -163,20 +166,28 @@ def opportunity_scores(frame: pd.DataFrame, min_deals: int = 10) -> pd.DataFrame
     latest_period = _latest_growth_period(market, min_deals) or int(market["period_index"].max())
     latest = market[market["period_index"] == latest_period].copy()
     latest = latest.dropna(subset=["average_rent", "total_deals"]).copy()
-    latest = latest[latest["total_deals"] >= min_deals]
+    latest = latest[
+        latest["growth_pct"].notna()
+        & latest["period_gap"].eq(1)
+        & (latest["total_deals"] >= min_deals)
+        & (latest["previous_total_deals"] >= min_deals)
+    ].copy()
     if latest.empty:
         return latest
 
+    cohort = latest.groupby("property_type", dropna=False)
+
     # 1. Liquidity Score (based on deal volume) - How active is this segment?
-    latest["liquidity_rank"] = latest["total_deals"].rank(pct=True)
+    latest["liquidity_rank"] = cohort["total_deals"].rank(pct=True)
     latest["liquidity_score"] = latest["liquidity_rank"] * 100
 
     # 2. Growth Score (based on rent growth) - Is this segment moving up?
-    latest["growth_pct"] = latest["growth_pct"].fillna(0)
-    latest["growth_rank"] = latest["growth_pct"].clip(lower=-50, upper=50).rank(pct=True)
+    latest["growth_rank"] = latest["growth_pct"].clip(lower=-50, upper=50).groupby(
+        latest["property_type"], dropna=False
+    ).rank(pct=True)
 
     # 3. Affordability Score (based on relative rent) - Is it priced attractively?
-    latest["affordability_rank"] = 1 - latest["average_rent"].rank(pct=True)
+    latest["affordability_rank"] = 1 - cohort["average_rent"].rank(pct=True)
 
     # 4. Final Property Score (weighted decision metric)
     latest["investor_score_balanced"] = (
@@ -196,6 +207,8 @@ def opportunity_scores(frame: pd.DataFrame, min_deals: int = 10) -> pd.DataFrame
     ).clip(0, 100)
 
     latest["score"] = latest["investor_score_balanced"]
+    latest["score_classification"] = "Inference"
+    latest["score_cohort"] = "same_property_type_and_geography_tier"
     return latest.sort_values("investor_score_balanced", ascending=False)
 
 
@@ -272,7 +285,7 @@ def detect_market_signals(scores: pd.DataFrame) -> list[dict[str, object]]:
                     f"{row['neighborhood']} | {row['property_type']} سجل نموًا {row.get('growth_pct'):.1f}% "
                     "مع سيولة أعلى من المتوسط."
                 ),
-                "decision": "القرار: الزخم قد يستمر. الدخول الآن قد يسبق ارتفاعات إضافية. لا تنتظر طويلاً للدراسة.",
+                "decision": "القرار: إشارة تستحق الدراسة، لكنها لا تثبت استمرار الاتجاه أو توقيت الدخول.",
                 "row": row,
             }
         )
