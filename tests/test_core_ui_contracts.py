@@ -32,6 +32,7 @@ from real_estate_intel.ui.contracts import (
     validate_comparison,
     validate_core_state,
 )
+from real_estate_intel.ui.shell import dispatch_route
 
 
 def _candidate(**overrides: str) -> ComparisonCandidate:
@@ -70,6 +71,18 @@ class CoreRouteAndStateContractTests(unittest.TestCase):
         state["deal.input.purchase_price"] = 900_000
 
         self.assertEqual(validate_core_state(state), ("invalid_state_value:market.view_mode",))
+
+    def test_route_state_persists_and_dispatches_exactly_one_renderer(self) -> None:
+        state: dict[str, object] = {"core.route": "comparison"}
+        initialize_core_state(state)
+        calls: list[str] = []
+        renderers = {route.route_id: lambda route_id=route.route_id: calls.append(route_id) for route in CORE_ROUTES}
+
+        active = dispatch_route(state["core.route"], renderers)
+
+        self.assertEqual(state["core.route"], "comparison")
+        self.assertEqual(active, "comparison")
+        self.assertEqual(calls, ["comparison"])
 
 
 class ComparisonAndDealContractTests(unittest.TestCase):

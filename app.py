@@ -86,6 +86,13 @@ from real_estate_intel.official_sources import (
 from real_estate_intel.reporting import build_investment_memo_html, build_investment_memo_pdf
 from real_estate_intel.sales import latest_sale_comparable
 from real_estate_intel.underwriting import PropertyAssumptions, analyze_property, stress_test_property
+from real_estate_intel.ui.contracts import (
+    ROUTE_IDS,
+    ROUTE_LABELS_AR,
+    initialize_core_state,
+    normalize_route,
+)
+from real_estate_intel.ui.shell import dispatch_route
 from real_estate_intel.user_profiles import (
     UserProfile,
     get_user_profile,
@@ -101,26 +108,76 @@ st.markdown(
     """
     <style>
     :root {
-        --page: #f4f7f5;
-        --panel: #ffffff;
-        --panel-soft: #f8fbf9;
-        --ink: #17211f;
-        --muted: #66736e;
-        --line: #dbe7e1;
-        --teal: #0b6b53;
-        --teal-soft: #e5f2ee;
-        --amber: #b87918;
-        --blue: #1c5d99;
-        --rose: #a73f54;
+        --surface-canvas: #f4f7f5;
+        --surface-default: #ffffff;
+        --surface-subtle: #f8fbf9;
+        --text-primary: #17211f;
+        --text-secondary: #66736e;
+        --border-default: #dbe7e1;
+        --border-focus: #167d62;
+        --action-primary: #0b6b53;
+        --action-primary-hover: #095844;
+        --action-primary-subtle: #e5f2ee;
+        --status-success: #0b6b53;
+        --status-warning: #b87918;
+        --status-error: #a73f54;
+        --status-info: #1c5d99;
+        --focus-ring: rgba(22, 125, 98, .28);
+        --font-ui: "Cairo", "Segoe UI", Tahoma, Arial, sans-serif;
+        --font-weight-regular: 400;
+        --font-weight-semibold: 600;
+        --font-weight-bold: 700;
+        --page: var(--surface-canvas);
+        --panel: var(--surface-default);
+        --panel-soft: var(--surface-subtle);
+        --ink: var(--text-primary);
+        --muted: var(--text-secondary);
+        --line: var(--border-default);
+        --teal: var(--action-primary);
+        --teal-soft: var(--action-primary-subtle);
+        --amber: var(--status-warning);
+        --blue: var(--status-info);
+        --rose: var(--status-error);
     }
-    html, body, [class*="css"] {
+    html,
+    body,
+    [data-testid="stAppViewContainer"],
+    [data-testid="stSidebar"] {
         direction: rtl;
         text-align: right;
-        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+        font-family: var(--font-ui);
+        font-weight: var(--font-weight-regular);
         color: var(--ink);
     }
+    .stApp,
+    .stApp button,
+    .stApp input,
+    .stApp textarea,
+    .stApp select {
+        font-family: var(--font-ui);
+    }
+    .stApp h1,
+    .stApp h2,
+    .stApp h3 {
+        font-weight: var(--font-weight-bold);
+    }
+    .stApp h4,
+    .stApp h5,
+    .stApp h6,
+    .stApp button {
+        font-weight: var(--font-weight-semibold);
+    }
+    :where(a, button, input, textarea, select, [role="button"], [tabindex]):focus-visible {
+        outline: 3px solid var(--border-focus) !important;
+        outline-offset: 2px;
+        box-shadow: 0 0 0 4px var(--focus-ring) !important;
+    }
     .stApp { background: var(--page); }
-    .block-container { padding-top: 1.1rem; max-width: 1540px; }
+    .block-container {
+        padding-top: 1.1rem;
+        padding-inline: clamp(1rem, 3vw, 3rem);
+        max-width: 1540px;
+    }
     div[data-testid="stMetricValue"] { direction: ltr; text-align: right; }
     div[data-testid="stMetricDelta"] { direction: ltr; text-align: right; }
     div[data-testid="stMetricLabel"] {
@@ -151,8 +208,11 @@ st.markdown(
     .stPlotlyChart { direction: ltr; }
     section[data-testid="stSidebar"] {
         direction: rtl;
-        background: #eef4f1;
+        background: var(--surface-subtle);
         border-left: 1px solid var(--line);
+    }
+    section[data-testid="stSidebar"] div[data-testid="stRadio"] label {
+        font-weight: var(--font-weight-semibold);
     }
     .digital-header {
         background: var(--panel);
@@ -172,12 +232,14 @@ st.markdown(
         display: flex;
         align-items: center;
         gap: .9rem;
+        min-width: 0;
     }
+    .brand-lockup > div { min-width: 0; }
     .brand-lockup img { width: 64px; height: 64px; flex: 0 0 auto; }
     .brand-lockup small {
         display: block;
         color: var(--teal);
-        font-weight: 700;
+        font-weight: var(--font-weight-bold);
         letter-spacing: .12em;
         direction: ltr;
         text-align: right;
@@ -186,6 +248,22 @@ st.markdown(
         margin: .45rem 0 0;
         color: var(--muted);
         font-size: 1rem;
+    }
+    .route-current {
+        display: inline-flex;
+        align-items: center;
+        gap: .45rem;
+        margin-top: .75rem;
+        padding: .38rem .72rem;
+        border: 1px solid var(--border-default);
+        border-radius: 999px;
+        background: var(--surface-subtle);
+        color: var(--text-secondary);
+        font-size: .86rem;
+    }
+    .route-current strong {
+        color: var(--text-primary);
+        font-weight: var(--font-weight-bold);
     }
     .status-strip {
         display: flex;
@@ -256,7 +334,7 @@ st.markdown(
     }
     .panel-label {
         color: var(--teal);
-        font-weight: 700;
+        font-weight: var(--font-weight-bold);
         font-size: .82rem;
         margin-bottom: .35rem;
     }
@@ -297,7 +375,7 @@ st.markdown(
         direction: ltr;
         text-align: right;
         font-size: 2rem;
-        font-weight: 800;
+        font-weight: var(--font-weight-bold);
         color: var(--teal);
         line-height: 1.1;
     }
@@ -315,14 +393,14 @@ st.markdown(
         display: block;
         font-size: .82rem;
         color: var(--muted);
-        font-weight: 600;
+        font-weight: var(--font-weight-semibold);
     }
     .signal-mini span {
         display: block;
         direction: ltr;
         text-align: right;
         font-size: 1.05rem;
-        font-weight: 750;
+        font-weight: var(--font-weight-bold);
         color: var(--ink);
         margin-top: .15rem;
     }
@@ -380,14 +458,14 @@ st.markdown(
         display: block;
         color: var(--muted);
         font-size: .82rem;
-        font-weight: 600;
+        font-weight: var(--font-weight-semibold);
     }
     .assistant-fact span {
         display: block;
         direction: ltr;
         text-align: right;
         color: var(--ink);
-        font-weight: 800;
+        font-weight: var(--font-weight-bold);
         margin-top: .16rem;
     }
     .coverage-panel {
@@ -421,12 +499,12 @@ st.markdown(
         display: block;
         color: var(--muted);
         font-size: .82rem;
-        font-weight: 600;
+        font-weight: var(--font-weight-semibold);
     }
     .coverage-item span {
         display: block;
         color: var(--ink);
-        font-weight: 800;
+        font-weight: var(--font-weight-bold);
         margin-top: .18rem;
     }
     .decision-grid,
@@ -475,7 +553,7 @@ st.markdown(
         border-radius: 999px;
         background: var(--teal-soft);
         color: var(--teal);
-        font-weight: 800;
+        font-weight: var(--font-weight-bold);
         padding: .28rem .65rem;
         margin-bottom: .55rem;
         direction: ltr;
@@ -510,6 +588,29 @@ st.markdown(
             grid-template-columns: 1fr;
         }
         .status-chip { white-space: normal; }
+    }
+    @media (max-width: 640px) {
+        section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarUserContent"] {
+            display: none;
+        }
+        section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {
+            background: transparent;
+            pointer-events: none;
+        }
+        section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarHeader"] {
+            pointer-events: auto;
+        }
+        .block-container {
+            padding-top: .75rem;
+            padding-inline: 1rem;
+        }
+        .digital-header { padding: 1rem; }
+        .brand-lockup { align-items: flex-start; gap: .65rem; }
+        .brand-lockup img { width: 48px; height: 48px; }
+        .digital-header h1 { font-size: 1.75rem; }
+        .digital-header p { font-size: .92rem; line-height: 1.65; }
+        .status-strip { gap: .4rem; }
+        .status-chip { width: 100%; }
     }
     </style>
     """,
@@ -697,7 +798,7 @@ def brand_logo_data_uri() -> str:
     return f"data:image/svg+xml;base64,{encoded}"
 
 
-def render_digital_header(data: pd.DataFrame) -> None:
+def render_digital_header(data: pd.DataFrame, active_route_label: str) -> None:
     latest_text = period_label(data) if not data.empty else "-"
     records = f"{len(data):,.0f}"
     deals = f"{data['total_deals'].sum():,.0f}" if "total_deals" in data else "0"
@@ -714,6 +815,7 @@ def render_digital_header(data: pd.DataFrame) -> None:
                     <small>{escape(BRAND_NAME_EN)}</small>
                     <h1>{escape(BRAND_NAME_AR)}</h1>
                     <p>{escape(BRAND_TAGLINE)} — {escape(BRAND_PROMISE)}</p>
+                    <span class="route-current">المسار الحالي: <strong>{escape(active_route_label)}</strong></span>
                 </div>
             </div>
             <div class="status-strip">
@@ -2721,13 +2823,32 @@ def scope_narrative(data: pd.DataFrame) -> str:
     return f"آخر فترة {latest_text}، مع {locations:,.0f} موقع و{property_types:,.0f} نوع عقار داخل الفلتر."
 
 
-def render_user_profile_selector() -> UserProfile:
+def render_core_navigation() -> str:
+    initialize_core_state(st.session_state)
+    current_route = normalize_route(st.session_state.get("core.route"))
+    if st.session_state.get("core.route") != current_route:
+        st.session_state["core.route"] = current_route
+
+    st.sidebar.markdown("### التنقل الرئيسي")
+    selected_route = st.sidebar.radio(
+        "وجهات قرينة",
+        ROUTE_IDS,
+        format_func=lambda route_id: ROUTE_LABELS_AR[route_id],
+        key="core.route",
+    )
+    st.sidebar.caption(f"المسار الحالي: {ROUTE_LABELS_AR[selected_route]}")
+    return selected_route
+
+
+def render_user_profile_selector() -> tuple[UserProfile, str]:
     logo_uri = brand_logo_data_uri()
     st.sidebar.markdown(
         f'<div class="brand-lockup"><img src="{logo_uri}" alt="شعار {escape(BRAND_NAME_AR)}" /><div><small>{escape(BRAND_NAME_EN)}</small><strong>{escape(BRAND_NAME_AR)}</strong></div></div>',
         unsafe_allow_html=True,
     )
     st.sidebar.caption(BRAND_TAGLINE)
+    st.sidebar.divider()
+    route_id = render_core_navigation()
     st.sidebar.divider()
     render_auth_sidebar()
     st.sidebar.divider()
@@ -2743,7 +2864,7 @@ def render_user_profile_selector() -> UserProfile:
     profile = get_user_profile(user_profile_key_from_label(selected_label))
     st.sidebar.caption(profile.description)
     st.sidebar.divider()
-    return profile
+    return profile, route_id
 
 
 def render_user_profile_overview(profile: UserProfile) -> None:
@@ -2816,12 +2937,89 @@ def render_platform_page() -> None:
                 st.write(case.outcome)
 
 
+def render_legacy_primary_route(
+    user_profile: UserProfile,
+    data: pd.DataFrame,
+    filtered: pd.DataFrame,
+    settings: dict[str, object],
+    sale_data: pd.DataFrame,
+) -> None:
+    if user_profile.key in {"investor", "broker"}:
+        render_riyadh_first_page(data, settings, sale_data)
+    elif user_profile.key == "developer":
+        render_developer_ai(filtered, sale_data)
+        st.divider()
+        render_kpis(filtered, settings, build_market_snapshot(filtered, settings))
+    else:
+        snapshot = build_market_snapshot(filtered, settings)
+        render_ai_briefing(filtered, settings, snapshot)
+        render_kpis(filtered, settings, snapshot)
+
+
+def render_active_core_route(
+    route_id: str,
+    user_profile: UserProfile,
+    data: pd.DataFrame,
+    filtered: pd.DataFrame,
+    settings: dict[str, object],
+    sale_data: pd.DataFrame,
+) -> str:
+    def render_home() -> None:
+        render_legacy_primary_route(user_profile, data, filtered, settings, sale_data)
+
+    def render_deal() -> None:
+        render_legacy_primary_route(user_profile, data, filtered, settings, sale_data)
+
+    def render_market() -> None:
+        snapshot = build_market_snapshot(filtered, settings)
+        render_kpis(filtered, settings, snapshot)
+        render_charts(filtered, settings, snapshot)
+        with st.expander("قائمة الفرص المحسوبة", expanded=False):
+            render_opportunities(filtered, settings, snapshot)
+        riyadh = riyadh_focus_data(data)
+        if not riyadh.empty:
+            with st.expander("خرائط الرياض الحرارية وتوزيع الصفقات", expanded=False):
+                render_riyadh_market_maps(riyadh, settings)
+
+    def render_comparison() -> None:
+        scores = build_riyadh_property_scores(
+            riyadh_focus_data(data), int(settings["min_deals"])
+        )
+        if scores.empty:
+            st.info("لا توجد شرائح مؤهلة للمقارنة ضمن النطاق الحالي.")
+            return
+        render_neighborhood_comparison_engine(scores)
+
+    def render_reports() -> None:
+        render_neighborhood_report_page()
+
+    def render_data_methodology() -> None:
+        render_data_engine_status()
+        render_sale_indicator_coverage(sale_data)
+        render_official_sources_status(data)
+        render_market_coverage(data, filtered)
+        render_data_quality(filtered)
+        with st.expander("البيانات الموحدة", expanded=False):
+            render_data_table(filtered, nested=True)
+
+    renderers = {
+        "home": render_home,
+        "deal_analysis": render_deal,
+        "market_exploration": render_market,
+        "comparison": render_comparison,
+        "reports": render_reports,
+        "data_methodology": render_data_methodology,
+    }
+    return dispatch_route(route_id, renderers)
+
+
 def main() -> None:
-    user_profile = render_user_profile_selector()
+    user_profile, route_id = render_user_profile_selector()
     warehouse_version = get_warehouse_version_string()
     data = get_data(warehouse_version)
-    sale_data = get_sale_data(warehouse_version)
-    render_digital_header(data)
+    needs_sale_data = route_id in {"home", "deal_analysis", "data_methodology"}
+    sale_data = get_sale_data(warehouse_version) if needs_sale_data else pd.DataFrame()
+    render_digital_header(data, ROUTE_LABELS_AR[route_id])
 
     if data.empty:
         render_empty_state()
@@ -2832,55 +3030,16 @@ def main() -> None:
         st.warning("لا توجد بيانات مطابقة للفلاتر الحالية.")
         return
 
-    snapshot = build_market_snapshot(filtered, settings)
     settings["user_profile"] = user_profile.key
     render_user_profile_overview(user_profile)
-    decision_tab, analyst_tab, market_tab, data_tab, neighborhood_tab, riyadh_map_tab, platform_tab = st.tabs(
-        [*list(user_profile.tab_labels), "📋 تقرير المخطط", "🗺️ خريطة الرياض", "المنصة"]
+    render_active_core_route(
+        route_id,
+        user_profile,
+        data,
+        filtered,
+        settings,
+        sale_data,
     )
-
-    with decision_tab:
-        if user_profile.key in {"investor", "broker"}:
-            render_riyadh_first_page(data, settings, sale_data)
-        elif user_profile.key == "developer":
-            render_developer_ai(filtered, sale_data)
-            st.divider()
-            render_kpis(filtered, settings, snapshot)
-        else:
-            render_ai_briefing(filtered, settings, snapshot)
-            render_kpis(filtered, settings, snapshot)
-
-    with analyst_tab:
-        render_ai_briefing(filtered, settings, snapshot)
-        render_decision_assistant(filtered, settings, snapshot)
-
-    with market_tab:
-        render_kpis(filtered, settings, snapshot)
-        render_charts(filtered, settings, snapshot)
-        with st.expander("قائمة الفرص المحسوبة", expanded=False):
-            render_opportunities(filtered, settings, snapshot)
-        riyadh = riyadh_focus_data(data)
-        if not riyadh.empty:
-            with st.expander("خرائط الرياض الحرارية وتوزيع الصفقات", expanded=False):
-                render_riyadh_market_maps(riyadh, settings)
-
-    with data_tab:
-        render_data_engine_status()
-        render_sale_indicator_coverage(sale_data)
-        render_official_sources_status(data)
-        render_market_coverage(data, filtered)
-        render_data_quality(filtered)
-        with st.expander("البيانات الموحدة", expanded=False):
-            render_data_table(filtered, nested=True)
-
-    with neighborhood_tab:
-        render_neighborhood_report_page()
-
-    with riyadh_map_tab:
-        render_riyadh_map_page()
-
-    with platform_tab:
-        render_platform_page()
 
 
 def apply_pending_developer_project(property_types: list[str]) -> str | None:
