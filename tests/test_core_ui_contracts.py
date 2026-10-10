@@ -169,8 +169,11 @@ class ChartMapAndPresentationContractTests(unittest.TestCase):
         self.assertEqual(
             PRESENTATION_TERMS_AR,
             {
+                "Raw": "بيانات مباشرة",
                 "Inference": "استنتاج تحليلي",
                 "Calculated": "مؤشر محسوب",
+                "Estimated": "تقديري",
+                "Forecast": "توقع",
                 "Data Sufficiency": "كفاية البيانات",
             },
         )

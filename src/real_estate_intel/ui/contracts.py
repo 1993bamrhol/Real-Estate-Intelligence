@@ -260,8 +260,11 @@ def map_safety_contract(*, verified_geography: bool = False) -> MapSafetyContrac
 
 
 PRESENTATION_TERMS_AR: Final = {
+    "Raw": "بيانات مباشرة",
     "Inference": "استنتاج تحليلي",
     "Calculated": "مؤشر محسوب",
+    "Estimated": "تقديري",
+    "Forecast": "توقع",
     "Data Sufficiency": "كفاية البيانات",
 }
 

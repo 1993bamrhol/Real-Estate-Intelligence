@@ -48,7 +48,6 @@ from real_estate_intel.auth import (
 from real_estate_intel.brand import (
     BRAND_DISCLAIMER,
     BRAND_NAME_AR,
-    BRAND_NAME_EN,
     BRAND_PROMISE,
     BRAND_TAGLINE,
     PRICING_PLANS,
@@ -93,6 +92,7 @@ from real_estate_intel.ui.contracts import (
     normalize_route,
 )
 from real_estate_intel.ui.shell import dispatch_route
+from real_estate_intel.ui.home import build_home_view_model
 from real_estate_intel.user_profiles import (
     UserProfile,
     get_user_profile,
@@ -578,13 +578,170 @@ st.markdown(
         text-align: right;
         margin-top: .12rem;
     }
+    .home-hero {
+        padding: clamp(1.5rem, 4vw, 3rem) 0 1.25rem;
+        max-width: 920px;
+    }
+    .home-eyebrow {
+        color: var(--action-primary);
+        font-size: .88rem;
+        font-weight: var(--font-weight-semibold);
+        margin: 0 0 .55rem;
+    }
+    .home-hero h2 {
+        color: var(--text-primary);
+        font-size: clamp(2rem, 4vw, 3.4rem);
+        line-height: 1.28;
+        margin: 0;
+        max-width: 820px;
+    }
+    .home-hero > p:last-child {
+        color: var(--text-secondary);
+        font-size: 1.05rem;
+        line-height: 1.85;
+        margin: .9rem 0 0;
+        max-width: 760px;
+    }
+    .home-action-note {
+        color: var(--text-secondary);
+        font-size: .88rem;
+        margin: .4rem 0 0;
+    }
+    .st-key-home_actions {
+        max-width: 760px;
+        margin-bottom: 1.5rem;
+    }
+    .home-scope {
+        align-items: center;
+        background: var(--surface-subtle);
+        border: 1px solid var(--border-default);
+        border-radius: 10px;
+        color: var(--text-secondary);
+        display: flex;
+        flex-wrap: wrap;
+        gap: .55rem;
+        justify-content: space-between;
+        padding: .8rem 1rem;
+    }
+    .home-scope strong { color: var(--text-primary); }
+    .home-section { margin-top: clamp(2rem, 5vw, 3.5rem); }
+    .home-section-heading {
+        margin-bottom: 1rem;
+        max-width: 760px;
+    }
+    .home-section-heading h3 {
+        color: var(--text-primary);
+        font-size: 1.45rem;
+        margin: 0 0 .35rem;
+    }
+    .home-section-heading p {
+        color: var(--text-secondary);
+        line-height: 1.7;
+        margin: 0;
+    }
+    .home-kpi-grid {
+        display: grid;
+        gap: .75rem;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    .home-kpi {
+        background: var(--surface-default);
+        border: 1px solid var(--border-default);
+        border-radius: 10px;
+        padding: 1rem;
+    }
+    .home-kpi-label,
+    .home-opportunity-label {
+        color: var(--text-secondary);
+        font-size: .82rem;
+        font-weight: var(--font-weight-semibold);
+    }
+    .home-kpi-value {
+        color: var(--text-primary);
+        direction: rtl;
+        font-size: clamp(1.55rem, 3vw, 2rem);
+        font-weight: var(--font-weight-bold);
+        margin: .35rem 0;
+        text-align: right;
+    }
+    .home-evidence {
+        color: var(--action-primary);
+        font-size: .78rem;
+        font-weight: var(--font-weight-semibold);
+    }
+    .home-context {
+        color: var(--text-secondary);
+        font-size: .78rem;
+        line-height: 1.55;
+        margin-top: .25rem;
+    }
+    .home-opportunity-grid {
+        display: grid;
+        gap: .8rem;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .home-opportunity {
+        background: var(--surface-default);
+        border: 1px solid var(--border-default);
+        border-radius: 10px;
+        padding: 1rem;
+    }
+    .home-opportunity h4 {
+        color: var(--text-primary);
+        font-size: 1.15rem;
+        margin: 0 0 .3rem;
+    }
+    .home-opportunity-data {
+        border-bottom: 1px solid var(--border-default);
+        display: grid;
+        gap: .6rem;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin: .9rem 0 .75rem;
+        padding-bottom: .75rem;
+    }
+    .home-opportunity-data strong {
+        color: var(--text-primary);
+        direction: rtl;
+        display: block;
+        font-size: 1.05rem;
+        margin-top: .18rem;
+        text-align: right;
+    }
+    .home-score-line {
+        align-items: baseline;
+        color: var(--text-secondary);
+        display: flex;
+        flex-wrap: wrap;
+        font-size: .82rem;
+        gap: .45rem;
+    }
+    .home-score-line strong {
+        color: var(--action-primary);
+        direction: ltr;
+        font-size: 1rem;
+    }
+    .home-methodology {
+        background: var(--surface-subtle);
+        border: 1px solid var(--border-default);
+        border-radius: 10px;
+        margin-top: 2.5rem;
+        padding: 1rem;
+    }
+    .home-methodology h3 { margin: 0 0 .45rem; }
+    .home-methodology p {
+        color: var(--text-secondary);
+        line-height: 1.7;
+        margin: .25rem 0;
+    }
     @media (max-width: 900px) {
         .ai-briefing,
         .insight-row,
         .assistant-facts,
         .coverage-grid,
         .decision-grid,
-        .alert-grid {
+        .alert-grid,
+        .home-kpi-grid,
+        .home-opportunity-grid {
             grid-template-columns: 1fr;
         }
         .status-chip { white-space: normal; }
@@ -611,6 +768,10 @@ st.markdown(
         .digital-header p { font-size: .92rem; line-height: 1.65; }
         .status-strip { gap: .4rem; }
         .status-chip { width: 100%; }
+        .st-key-home_actions [data-testid="stHorizontalBlock"] { flex-direction: column; }
+        .home-hero { padding-top: 1.25rem; }
+        .home-hero h2 { font-size: 2rem; }
+        .home-opportunity-data { grid-template-columns: 1fr; }
     }
     </style>
     """,
@@ -714,7 +875,7 @@ def render_auth_sidebar() -> None:
         st.sidebar.info(str(notice))
     if client is None:
         st.sidebar.caption(
-            "تسجيل الدخول غير مفعّل بعد. أضف SUPABASE_URL وSUPABASE_PUBLISHABLE_KEY إلى Secrets."
+            "تسجيل الدخول غير مفعّل بعد. يحتاج مسؤول النظام إلى إكمال إعدادات المصادقة."
         )
         return
 
@@ -798,7 +959,12 @@ def brand_logo_data_uri() -> str:
     return f"data:image/svg+xml;base64,{encoded}"
 
 
-def render_digital_header(data: pd.DataFrame, active_route_label: str) -> None:
+def render_digital_header(
+    data: pd.DataFrame,
+    active_route_label: str,
+    *,
+    show_status: bool = True,
+) -> None:
     latest_text = period_label(data) if not data.empty else "-"
     records = f"{len(data):,.0f}"
     deals = f"{data['total_deals'].sum():,.0f}" if "total_deals" in data else "0"
@@ -806,18 +972,8 @@ def render_digital_header(data: pd.DataFrame, active_route_label: str) -> None:
     sources = f"{data['dataset_id'].nunique():,.0f}" if "dataset_id" in data else "0"
 
     logo_uri = brand_logo_data_uri()
-    st.markdown(
+    status_markup = (
         f"""
-        <section class="digital-header">
-            <div class="brand-lockup">
-                <img src="{logo_uri}" alt="شعار {escape(BRAND_NAME_AR)}" />
-                <div>
-                    <small>{escape(BRAND_NAME_EN)}</small>
-                    <h1>{escape(BRAND_NAME_AR)}</h1>
-                    <p>{escape(BRAND_TAGLINE)} — {escape(BRAND_PROMISE)}</p>
-                    <span class="route-current">المسار الحالي: <strong>{escape(active_route_label)}</strong></span>
-                </div>
-            </div>
             <div class="status-strip">
                 <span class="status-chip">آخر فترة: {escape(latest_text)}</span>
                 <span class="status-chip">السجلات: {records}</span>
@@ -825,6 +981,23 @@ def render_digital_header(data: pd.DataFrame, active_route_label: str) -> None:
                 <span class="status-chip">المدن: {cities}</span>
                 <span class="status-chip">مصادر البيانات: {sources}</span>
             </div>
+        """
+        if show_status
+        else ""
+    )
+    st.markdown(
+        f"""
+        <section class="digital-header">
+            <div class="brand-lockup">
+                <img src="{logo_uri}" alt="شعار {escape(BRAND_NAME_AR)}" />
+                <div>
+                    <small>ذكاء عقاري</small>
+                    <h1>{escape(BRAND_NAME_AR)}</h1>
+                    <p>{escape(BRAND_TAGLINE)} — {escape(BRAND_PROMISE)}</p>
+                    <span class="route-current">المسار الحالي: <strong>{escape(active_route_label)}</strong></span>
+                </div>
+            </div>
+            {status_markup}
         </section>
         """,
         unsafe_allow_html=True,
@@ -2843,7 +3016,7 @@ def render_core_navigation() -> str:
 def render_user_profile_selector() -> tuple[UserProfile, str]:
     logo_uri = brand_logo_data_uri()
     st.sidebar.markdown(
-        f'<div class="brand-lockup"><img src="{logo_uri}" alt="شعار {escape(BRAND_NAME_AR)}" /><div><small>{escape(BRAND_NAME_EN)}</small><strong>{escape(BRAND_NAME_AR)}</strong></div></div>',
+        f'<div class="brand-lockup"><img src="{logo_uri}" alt="شعار {escape(BRAND_NAME_AR)}" /><div><small>ذكاء عقاري</small><strong>{escape(BRAND_NAME_AR)}</strong></div></div>',
         unsafe_allow_html=True,
     )
     st.sidebar.caption(BRAND_TAGLINE)
@@ -2937,6 +3110,152 @@ def render_platform_page() -> None:
                 st.write(case.outcome)
 
 
+def _navigate_to_core_route(route_id: str) -> None:
+    st.session_state["core.route"] = normalize_route(route_id)
+
+
+def render_home_page(data: pd.DataFrame) -> None:
+    view_model = build_home_view_model(data)
+    st.markdown(
+        """
+        <section class="home-hero">
+            <p class="home-eyebrow">ذكاء عقاري قائم على البيانات</p>
+            <h2>افهم السوق، ثم راجع الفرصة قبل القرار العقاري.</h2>
+            <p>
+                تساعدك قرينة على قراءة حركة سوق الإيجار ومراجعة الفرص ضمن نطاق واضح،
+                ثم الانتقال إلى تحليل عقار محدد أو استكشاف السوق بتفصيل أكبر.
+            </p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.container(key="home_actions"):
+        primary, secondary = st.columns(2)
+        with primary:
+            st.button(
+                "حلّل صفقة",
+                type="primary",
+                key="home_cta_deal",
+                width="stretch",
+                on_click=_navigate_to_core_route,
+                args=("deal_analysis",),
+            )
+            st.markdown('<p class="home-action-note">ابدأ بعقار وسعر ومساحة محددة.</p>', unsafe_allow_html=True)
+        with secondary:
+            st.button(
+                "استكشف السوق",
+                type="secondary",
+                key="home_cta_market",
+                width="stretch",
+                on_click=_navigate_to_core_route,
+                args=("market_exploration",),
+            )
+            st.markdown('<p class="home-action-note">ابدأ بالنطاق والبيانات المرصودة.</p>', unsafe_allow_html=True)
+
+    st.markdown(
+        f"""
+        <div class="home-scope">
+            <span>النطاق الحالي</span>
+            <strong>{escape(view_model.scope_ar)}</strong>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not view_model.available:
+        st.info(view_model.data_message_ar)
+        return
+
+    metrics_markup = "".join(
+        f"""
+        <article class="home-kpi">
+            <div class="home-kpi-label">{escape(metric.label_ar)}</div>
+            <div class="home-kpi-value">{escape(metric.value_ar)}</div>
+            <div class="home-evidence">{escape(metric.evidence_ar)}</div>
+            <div class="home-context">{escape(metric.context_ar)}</div>
+        </article>
+        """
+        for metric in view_model.metrics
+    )
+    st.markdown(
+        f"""
+        <section class="home-section">
+            <div class="home-section-heading">
+                <h3>ماذا يحدث في النطاق الحالي؟</h3>
+                <p>ثلاثة مؤشرات موجزة للفترة نفسها، مع توضيح نوع الدليل وطريقة القراءة.</p>
+            </div>
+            <div class="home-kpi-grid">{metrics_markup}</div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if view_model.opportunities:
+        opportunities_markup = "".join(
+            f"""
+            <article class="home-opportunity">
+                <h4>{escape(item.segment_ar)} · {escape(item.property_type_ar)}</h4>
+                <div class="home-context">{escape(item.cohort_ar)}</div>
+                <div class="home-opportunity-data">
+                    <div>
+                        <span class="home-opportunity-label">متوسط الإيجار المنشور</span>
+                        <strong>{escape(item.average_rent_ar)}</strong>
+                        <div class="home-evidence">{escape(item.rent_evidence_ar)}</div>
+                    </div>
+                    <div>
+                        <span class="home-opportunity-label">عقود الإيجار</span>
+                        <strong>{escape(item.total_deals_ar)}</strong>
+                        <div class="home-evidence">{escape(item.deals_evidence_ar)}</div>
+                    </div>
+                    <div>
+                        <span class="home-opportunity-label">التغير الربعي</span>
+                        <strong>{escape(item.growth_ar)}</strong>
+                        <div class="home-evidence">{escape(item.growth_evidence_ar)}</div>
+                        <div class="home-context">{escape(item.growth_period_ar)}</div>
+                    </div>
+                </div>
+                <div class="home-score-line">
+                    <span>مؤشر الفرصة</span>
+                    <strong>{escape(item.score_ar)}</strong>
+                    <span>· {escape(item.evidence_ar)} · {escape(item.rank_context_ar)}</span>
+                </div>
+            </article>
+            """
+            for item in view_model.opportunities
+        )
+        st.markdown(
+            f"""
+            <section class="home-section">
+                <div class="home-section-heading">
+                    <h3>فرص تستحق المراجعة</h3>
+                    <p>ترتيب أولي داخل مجموعة المقارنة الحالية؛ ابدأ بالدليل المرصود قبل قراءة المؤشر النسبي.</p>
+                </div>
+                <div class="home-opportunity-grid">{opportunities_markup}</div>
+            </section>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        f"""
+        <section class="home-methodology">
+            <h3>الدليل والمنهجية باختصار</h3>
+            <p><strong>المصدر:</strong> {escape(view_model.source_ar)}</p>
+            <p>{escape(view_model.limitation_ar)}</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.button(
+        "راجع البيانات والمنهجية",
+        type="secondary",
+        key="home_cta_methodology",
+        on_click=_navigate_to_core_route,
+        args=("data_methodology",),
+    )
+
+
 def render_legacy_primary_route(
     user_profile: UserProfile,
     data: pd.DataFrame,
@@ -2965,7 +3284,7 @@ def render_active_core_route(
     sale_data: pd.DataFrame,
 ) -> str:
     def render_home() -> None:
-        render_legacy_primary_route(user_profile, data, filtered, settings, sale_data)
+        render_home_page(data)
 
     def render_deal() -> None:
         render_legacy_primary_route(user_profile, data, filtered, settings, sale_data)
@@ -3017,12 +3336,23 @@ def main() -> None:
     user_profile, route_id = render_user_profile_selector()
     warehouse_version = get_warehouse_version_string()
     data = get_data(warehouse_version)
-    needs_sale_data = route_id in {"home", "deal_analysis", "data_methodology"}
+    needs_sale_data = route_id in {"deal_analysis", "data_methodology"}
     sale_data = get_sale_data(warehouse_version) if needs_sale_data else pd.DataFrame()
-    render_digital_header(data, ROUTE_LABELS_AR[route_id])
+    render_digital_header(data, ROUTE_LABELS_AR[route_id], show_status=route_id != "home")
 
     if data.empty:
         render_empty_state()
+        return
+
+    if route_id == "home":
+        render_active_core_route(
+            route_id,
+            user_profile,
+            data,
+            data,
+            {"min_deals": 10, "user_profile": user_profile.key},
+            sale_data,
+        )
         return
 
     filtered, settings = render_filters(data)
