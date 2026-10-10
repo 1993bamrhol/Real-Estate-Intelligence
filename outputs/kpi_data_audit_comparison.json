@@ -1,0 +1,79 @@
+{
+  "generated_at": "2026-09-01T01:10:06.386788+03:00",
+  "gate_status": "PASS",
+  "gates": {
+    "unique_rental_business_grain": true,
+    "no_deal_overcount_from_source_overlap": true,
+    "growth_uses_adjacent_quarters_only": true,
+    "opportunity_scores_have_eligible_prior": true,
+    "riyadh_scores_have_minimum_prior_deals": true,
+    "riyadh_growth_uses_adjacent_quarters_only": true,
+    "forecast_has_rolling_backtest": true,
+    "metric_registry_complete": true
+  },
+  "metrics": [
+    {
+      "metric": "business_key_duplicate_rows",
+      "before": 1486,
+      "after": 0,
+      "delta": -1486.0,
+      "desired_direction": "lower"
+    },
+    {
+      "metric": "business_key_duplicate_rate_pct",
+      "before": 3.2878,
+      "after": 0.0,
+      "delta": -3.2878,
+      "desired_direction": "lower"
+    },
+    {
+      "metric": "potential_deal_overcount_pct",
+      "before": 0.7094,
+      "after": 0.0,
+      "delta": -0.7094,
+      "desired_direction": "lower"
+    },
+    {
+      "metric": "latest_potential_deal_overcount_pct",
+      "before": 6.4582,
+      "after": 0.0,
+      "delta": -6.4582,
+      "desired_direction": "lower"
+    },
+    {
+      "metric": "nonconsecutive_growth_comparisons",
+      "before": 4564,
+      "after": 0,
+      "delta": -4564.0,
+      "desired_direction": "lower"
+    },
+    {
+      "metric": "opportunity_missing_previous_period",
+      "before": 25,
+      "after": 0,
+      "delta": -25.0,
+      "desired_direction": "lower"
+    },
+    {
+      "metric": "opportunity_zero_growth_after_fill",
+      "before": 32,
+      "after": 0,
+      "delta": -32.0,
+      "desired_direction": "lower"
+    },
+    {
+      "metric": "riyadh_previous_deals_below_threshold_rows",
+      "before": 26,
+      "after": 0,
+      "delta": -26.0,
+      "desired_direction": "lower"
+    },
+    {
+      "metric": "riyadh_nonconsecutive_growth_rows",
+      "before": 4,
+      "after": 0,
+      "delta": -4.0,
+      "desired_direction": "lower"
+    }
+  ]
+}

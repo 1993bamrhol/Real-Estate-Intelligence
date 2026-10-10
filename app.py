@@ -48,7 +48,6 @@ from real_estate_intel.auth import (
 from real_estate_intel.brand import (
     BRAND_DISCLAIMER,
     BRAND_NAME_AR,
-    BRAND_NAME_EN,
     BRAND_PROMISE,
     BRAND_TAGLINE,
     PRICING_PLANS,
@@ -86,6 +85,14 @@ from real_estate_intel.official_sources import (
 from real_estate_intel.reporting import build_investment_memo_html, build_investment_memo_pdf
 from real_estate_intel.sales import latest_sale_comparable
 from real_estate_intel.underwriting import PropertyAssumptions, analyze_property, stress_test_property
+from real_estate_intel.ui.contracts import (
+    ROUTE_IDS,
+    ROUTE_LABELS_AR,
+    initialize_core_state,
+    normalize_route,
+)
+from real_estate_intel.ui.shell import dispatch_route
+from real_estate_intel.ui.home import build_home_view_model
 from real_estate_intel.user_profiles import (
     UserProfile,
     get_user_profile,
@@ -101,26 +108,76 @@ st.markdown(
     """
     <style>
     :root {
-        --page: #f4f7f5;
-        --panel: #ffffff;
-        --panel-soft: #f8fbf9;
-        --ink: #17211f;
-        --muted: #66736e;
-        --line: #dbe7e1;
-        --teal: #0b6b53;
-        --teal-soft: #e5f2ee;
-        --amber: #b87918;
-        --blue: #1c5d99;
-        --rose: #a73f54;
+        --surface-canvas: #f4f7f5;
+        --surface-default: #ffffff;
+        --surface-subtle: #f8fbf9;
+        --text-primary: #17211f;
+        --text-secondary: #66736e;
+        --border-default: #dbe7e1;
+        --border-focus: #167d62;
+        --action-primary: #0b6b53;
+        --action-primary-hover: #095844;
+        --action-primary-subtle: #e5f2ee;
+        --status-success: #0b6b53;
+        --status-warning: #b87918;
+        --status-error: #a73f54;
+        --status-info: #1c5d99;
+        --focus-ring: rgba(22, 125, 98, .28);
+        --font-ui: "Cairo", "Segoe UI", Tahoma, Arial, sans-serif;
+        --font-weight-regular: 400;
+        --font-weight-semibold: 600;
+        --font-weight-bold: 700;
+        --page: var(--surface-canvas);
+        --panel: var(--surface-default);
+        --panel-soft: var(--surface-subtle);
+        --ink: var(--text-primary);
+        --muted: var(--text-secondary);
+        --line: var(--border-default);
+        --teal: var(--action-primary);
+        --teal-soft: var(--action-primary-subtle);
+        --amber: var(--status-warning);
+        --blue: var(--status-info);
+        --rose: var(--status-error);
     }
-    html, body, [class*="css"] {
+    html,
+    body,
+    [data-testid="stAppViewContainer"],
+    [data-testid="stSidebar"] {
         direction: rtl;
         text-align: right;
-        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+        font-family: var(--font-ui);
+        font-weight: var(--font-weight-regular);
         color: var(--ink);
     }
+    .stApp,
+    .stApp button,
+    .stApp input,
+    .stApp textarea,
+    .stApp select {
+        font-family: var(--font-ui);
+    }
+    .stApp h1,
+    .stApp h2,
+    .stApp h3 {
+        font-weight: var(--font-weight-bold);
+    }
+    .stApp h4,
+    .stApp h5,
+    .stApp h6,
+    .stApp button {
+        font-weight: var(--font-weight-semibold);
+    }
+    :where(a, button, input, textarea, select, [role="button"], [tabindex]):focus-visible {
+        outline: 3px solid var(--border-focus) !important;
+        outline-offset: 2px;
+        box-shadow: 0 0 0 4px var(--focus-ring) !important;
+    }
     .stApp { background: var(--page); }
-    .block-container { padding-top: 1.1rem; max-width: 1540px; }
+    .block-container {
+        padding-top: 1.1rem;
+        padding-inline: clamp(1rem, 3vw, 3rem);
+        max-width: 1540px;
+    }
     div[data-testid="stMetricValue"] { direction: ltr; text-align: right; }
     div[data-testid="stMetricDelta"] { direction: ltr; text-align: right; }
     div[data-testid="stMetricLabel"] {
@@ -151,8 +208,11 @@ st.markdown(
     .stPlotlyChart { direction: ltr; }
     section[data-testid="stSidebar"] {
         direction: rtl;
-        background: #eef4f1;
+        background: var(--surface-subtle);
         border-left: 1px solid var(--line);
+    }
+    section[data-testid="stSidebar"] div[data-testid="stRadio"] label {
+        font-weight: var(--font-weight-semibold);
     }
     .digital-header {
         background: var(--panel);
@@ -172,12 +232,14 @@ st.markdown(
         display: flex;
         align-items: center;
         gap: .9rem;
+        min-width: 0;
     }
+    .brand-lockup > div { min-width: 0; }
     .brand-lockup img { width: 64px; height: 64px; flex: 0 0 auto; }
     .brand-lockup small {
         display: block;
         color: var(--teal);
-        font-weight: 700;
+        font-weight: var(--font-weight-bold);
         letter-spacing: .12em;
         direction: ltr;
         text-align: right;
@@ -186,6 +248,22 @@ st.markdown(
         margin: .45rem 0 0;
         color: var(--muted);
         font-size: 1rem;
+    }
+    .route-current {
+        display: inline-flex;
+        align-items: center;
+        gap: .45rem;
+        margin-top: .75rem;
+        padding: .38rem .72rem;
+        border: 1px solid var(--border-default);
+        border-radius: 999px;
+        background: var(--surface-subtle);
+        color: var(--text-secondary);
+        font-size: .86rem;
+    }
+    .route-current strong {
+        color: var(--text-primary);
+        font-weight: var(--font-weight-bold);
     }
     .status-strip {
         display: flex;
@@ -256,7 +334,7 @@ st.markdown(
     }
     .panel-label {
         color: var(--teal);
-        font-weight: 700;
+        font-weight: var(--font-weight-bold);
         font-size: .82rem;
         margin-bottom: .35rem;
     }
@@ -297,7 +375,7 @@ st.markdown(
         direction: ltr;
         text-align: right;
         font-size: 2rem;
-        font-weight: 800;
+        font-weight: var(--font-weight-bold);
         color: var(--teal);
         line-height: 1.1;
     }
@@ -315,14 +393,14 @@ st.markdown(
         display: block;
         font-size: .82rem;
         color: var(--muted);
-        font-weight: 600;
+        font-weight: var(--font-weight-semibold);
     }
     .signal-mini span {
         display: block;
         direction: ltr;
         text-align: right;
         font-size: 1.05rem;
-        font-weight: 750;
+        font-weight: var(--font-weight-bold);
         color: var(--ink);
         margin-top: .15rem;
     }
@@ -380,14 +458,14 @@ st.markdown(
         display: block;
         color: var(--muted);
         font-size: .82rem;
-        font-weight: 600;
+        font-weight: var(--font-weight-semibold);
     }
     .assistant-fact span {
         display: block;
         direction: ltr;
         text-align: right;
         color: var(--ink);
-        font-weight: 800;
+        font-weight: var(--font-weight-bold);
         margin-top: .16rem;
     }
     .coverage-panel {
@@ -421,12 +499,12 @@ st.markdown(
         display: block;
         color: var(--muted);
         font-size: .82rem;
-        font-weight: 600;
+        font-weight: var(--font-weight-semibold);
     }
     .coverage-item span {
         display: block;
         color: var(--ink);
-        font-weight: 800;
+        font-weight: var(--font-weight-bold);
         margin-top: .18rem;
     }
     .decision-grid,
@@ -475,7 +553,7 @@ st.markdown(
         border-radius: 999px;
         background: var(--teal-soft);
         color: var(--teal);
-        font-weight: 800;
+        font-weight: var(--font-weight-bold);
         padding: .28rem .65rem;
         margin-bottom: .55rem;
         direction: ltr;
@@ -500,16 +578,200 @@ st.markdown(
         text-align: right;
         margin-top: .12rem;
     }
+    .home-hero {
+        padding: clamp(1.5rem, 4vw, 3rem) 0 1.25rem;
+        max-width: 920px;
+    }
+    .home-eyebrow {
+        color: var(--action-primary);
+        font-size: .88rem;
+        font-weight: var(--font-weight-semibold);
+        margin: 0 0 .55rem;
+    }
+    .home-hero h2 {
+        color: var(--text-primary);
+        font-size: clamp(2rem, 4vw, 3.4rem);
+        line-height: 1.28;
+        margin: 0;
+        max-width: 820px;
+    }
+    .home-hero > p:last-child {
+        color: var(--text-secondary);
+        font-size: 1.05rem;
+        line-height: 1.85;
+        margin: .9rem 0 0;
+        max-width: 760px;
+    }
+    .home-action-note {
+        color: var(--text-secondary);
+        font-size: .88rem;
+        margin: .4rem 0 0;
+    }
+    .st-key-home_actions {
+        max-width: 760px;
+        margin-bottom: 1.5rem;
+    }
+    .home-scope {
+        align-items: center;
+        background: var(--surface-subtle);
+        border: 1px solid var(--border-default);
+        border-radius: 10px;
+        color: var(--text-secondary);
+        display: flex;
+        flex-wrap: wrap;
+        gap: .55rem;
+        justify-content: space-between;
+        padding: .8rem 1rem;
+    }
+    .home-scope strong { color: var(--text-primary); }
+    .home-section { margin-top: clamp(2rem, 5vw, 3.5rem); }
+    .home-section-heading {
+        margin-bottom: 1rem;
+        max-width: 760px;
+    }
+    .home-section-heading h3 {
+        color: var(--text-primary);
+        font-size: 1.45rem;
+        margin: 0 0 .35rem;
+    }
+    .home-section-heading p {
+        color: var(--text-secondary);
+        line-height: 1.7;
+        margin: 0;
+    }
+    .home-kpi-grid {
+        display: grid;
+        gap: .75rem;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    .home-kpi {
+        background: var(--surface-default);
+        border: 1px solid var(--border-default);
+        border-radius: 10px;
+        padding: 1rem;
+    }
+    .home-kpi-label,
+    .home-opportunity-label {
+        color: var(--text-secondary);
+        font-size: .82rem;
+        font-weight: var(--font-weight-semibold);
+    }
+    .home-kpi-value {
+        color: var(--text-primary);
+        direction: rtl;
+        font-size: clamp(1.55rem, 3vw, 2rem);
+        font-weight: var(--font-weight-bold);
+        margin: .35rem 0;
+        text-align: right;
+    }
+    .home-evidence {
+        color: var(--action-primary);
+        font-size: .78rem;
+        font-weight: var(--font-weight-semibold);
+    }
+    .home-context {
+        color: var(--text-secondary);
+        font-size: .78rem;
+        line-height: 1.55;
+        margin-top: .25rem;
+    }
+    .home-opportunity-grid {
+        display: grid;
+        gap: .8rem;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .home-opportunity {
+        background: var(--surface-default);
+        border: 1px solid var(--border-default);
+        border-radius: 10px;
+        padding: 1rem;
+    }
+    .home-opportunity h4 {
+        color: var(--text-primary);
+        font-size: 1.15rem;
+        margin: 0 0 .3rem;
+    }
+    .home-opportunity-data {
+        border-bottom: 1px solid var(--border-default);
+        display: grid;
+        gap: .6rem;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin: .9rem 0 .75rem;
+        padding-bottom: .75rem;
+    }
+    .home-opportunity-data strong {
+        color: var(--text-primary);
+        direction: rtl;
+        display: block;
+        font-size: 1.05rem;
+        margin-top: .18rem;
+        text-align: right;
+    }
+    .home-score-line {
+        align-items: baseline;
+        color: var(--text-secondary);
+        display: flex;
+        flex-wrap: wrap;
+        font-size: .82rem;
+        gap: .45rem;
+    }
+    .home-score-line strong {
+        color: var(--action-primary);
+        direction: ltr;
+        font-size: 1rem;
+    }
+    .home-methodology {
+        background: var(--surface-subtle);
+        border: 1px solid var(--border-default);
+        border-radius: 10px;
+        margin-top: 2.5rem;
+        padding: 1rem;
+    }
+    .home-methodology h3 { margin: 0 0 .45rem; }
+    .home-methodology p {
+        color: var(--text-secondary);
+        line-height: 1.7;
+        margin: .25rem 0;
+    }
     @media (max-width: 900px) {
         .ai-briefing,
         .insight-row,
         .assistant-facts,
         .coverage-grid,
         .decision-grid,
-        .alert-grid {
+        .alert-grid,
+        .home-kpi-grid,
+        .home-opportunity-grid {
             grid-template-columns: 1fr;
         }
         .status-chip { white-space: normal; }
+    }
+    @media (max-width: 640px) {
+        section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarUserContent"] {
+            display: none;
+        }
+        section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {
+            background: transparent;
+            pointer-events: none;
+        }
+        section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarHeader"] {
+            pointer-events: auto;
+        }
+        .block-container {
+            padding-top: .75rem;
+            padding-inline: 1rem;
+        }
+        .digital-header { padding: 1rem; }
+        .brand-lockup { align-items: flex-start; gap: .65rem; }
+        .brand-lockup img { width: 48px; height: 48px; }
+        .digital-header h1 { font-size: 1.75rem; }
+        .digital-header p { font-size: .92rem; line-height: 1.65; }
+        .status-strip { gap: .4rem; }
+        .status-chip { width: 100%; }
+        .st-key-home_actions [data-testid="stHorizontalBlock"] { flex-direction: column; }
+        .home-hero { padding-top: 1.25rem; }
+        .home-hero h2 { font-size: 2rem; }
+        .home-opportunity-data { grid-template-columns: 1fr; }
     }
     </style>
     """,
@@ -613,7 +875,7 @@ def render_auth_sidebar() -> None:
         st.sidebar.info(str(notice))
     if client is None:
         st.sidebar.caption(
-            "تسجيل الدخول غير مفعّل بعد. أضف SUPABASE_URL وSUPABASE_PUBLISHABLE_KEY إلى Secrets."
+            "تسجيل الدخول غير مفعّل بعد. يحتاج مسؤول النظام إلى إكمال إعدادات المصادقة."
         )
         return
 
@@ -697,7 +959,12 @@ def brand_logo_data_uri() -> str:
     return f"data:image/svg+xml;base64,{encoded}"
 
 
-def render_digital_header(data: pd.DataFrame) -> None:
+def render_digital_header(
+    data: pd.DataFrame,
+    active_route_label: str,
+    *,
+    show_status: bool = True,
+) -> None:
     latest_text = period_label(data) if not data.empty else "-"
     records = f"{len(data):,.0f}"
     deals = f"{data['total_deals'].sum():,.0f}" if "total_deals" in data else "0"
@@ -705,17 +972,8 @@ def render_digital_header(data: pd.DataFrame) -> None:
     sources = f"{data['dataset_id'].nunique():,.0f}" if "dataset_id" in data else "0"
 
     logo_uri = brand_logo_data_uri()
-    st.markdown(
+    status_markup = (
         f"""
-        <section class="digital-header">
-            <div class="brand-lockup">
-                <img src="{logo_uri}" alt="شعار {escape(BRAND_NAME_AR)}" />
-                <div>
-                    <small>{escape(BRAND_NAME_EN)}</small>
-                    <h1>{escape(BRAND_NAME_AR)}</h1>
-                    <p>{escape(BRAND_TAGLINE)} — {escape(BRAND_PROMISE)}</p>
-                </div>
-            </div>
             <div class="status-strip">
                 <span class="status-chip">آخر فترة: {escape(latest_text)}</span>
                 <span class="status-chip">السجلات: {records}</span>
@@ -723,6 +981,23 @@ def render_digital_header(data: pd.DataFrame) -> None:
                 <span class="status-chip">المدن: {cities}</span>
                 <span class="status-chip">مصادر البيانات: {sources}</span>
             </div>
+        """
+        if show_status
+        else ""
+    )
+    st.markdown(
+        f"""
+        <section class="digital-header">
+            <div class="brand-lockup">
+                <img src="{logo_uri}" alt="شعار {escape(BRAND_NAME_AR)}" />
+                <div>
+                    <small>ذكاء عقاري</small>
+                    <h1>{escape(BRAND_NAME_AR)}</h1>
+                    <p>{escape(BRAND_TAGLINE)} — {escape(BRAND_PROMISE)}</p>
+                    <span class="route-current">المسار الحالي: <strong>{escape(active_route_label)}</strong></span>
+                </div>
+            </div>
+            {status_markup}
         </section>
         """,
         unsafe_allow_html=True,
@@ -764,16 +1039,16 @@ def build_market_snapshot(data: pd.DataFrame, settings: dict[str, object]) -> di
 
 def confidence_status(latest_data: pd.DataFrame, min_deals: int) -> tuple[str, str, str]:
     if latest_data.empty:
-        return "منخفضة", "confidence-low", "لا توجد بيانات في آخر فترة ضمن الفلتر."
+        return "غير كافية", "confidence-low", "لا توجد بيانات في آخر فترة ضمن الفلتر."
 
     locations = latest_data["location_ar"].nunique()
     deals = latest_data["total_deals"].sum()
     property_types = latest_data["property_type"].nunique()
     if deals >= min_deals * 80 and locations >= 30 and property_types >= 5:
-        return "عالية", "confidence-high", "تغطية واسعة ومؤشرات كافية للمقارنة."
+        return "عالية", "confidence-high", "كفاية بيانات مرتفعة للمقارنة؛ لا تعبّر عن دقة تنبؤية."
     if deals >= min_deals * 25 and locations >= 10:
-        return "متوسطة", "confidence-medium", "التغطية جيدة، لكن بعض الشرائح تحتاج عقودا أكثر."
-    return "تحتاج تدعيم", "confidence-low", "الفلتر ضيق أو عدد العقود محدود في آخر فترة."
+        return "متوسطة", "confidence-medium", "كفاية البيانات جيدة، لكن بعض الشرائح تحتاج عقودًا أكثر."
+    return "تحتاج تدعيم", "confidence-low", "كفاية البيانات محدودة لأن الفلتر ضيق أو العقود قليلة."
 
 
 def render_ai_briefing(
@@ -822,7 +1097,7 @@ def render_ai_briefing(
                 <p>الدرجة تجمع الطلب، النمو، وجاذبية السعر داخل الفلتر الحالي.</p>
                 <div class="signal-grid">
                     <div class="signal-mini">
-                        <b>ثقة القراءة</b>
+                        <b>كفاية البيانات</b>
                         <span class="{escape(confidence_class)}">{escape(confidence_label)}</span>
                     </div>
                     <div class="signal-mini">
@@ -2335,7 +2610,7 @@ def render_official_sources_status(data: pd.DataFrame) -> None:
                 "تقييم سعر شراء نهائي يحتاج دمج صفقات البيع والحدود الجغرافية الرسمية."
             )
         else:
-            st.warning("البيانات الحالية تحتاج تدعيم قبل استخدام التقرير كمنتج تجاري عالي الثقة.")
+            st.warning("البيانات الحالية تحتاج تدعيم قبل استخدام التقرير كمنتج تجاري واسع النطاق.")
 
     with st.expander("سجل المصادر الرسمية", expanded=False):
         view = sources.rename(
@@ -2346,7 +2621,6 @@ def render_official_sources_status(data: pd.DataFrame) -> None:
                 "status_ar": "الحالة",
                 "coverage_ar": "التغطية",
                 "used_for_ar": "الاستخدام في المنتج",
-                "trust_score": "درجة الثقة",
                 "url": "الرابط",
             }
         )
@@ -2359,7 +2633,6 @@ def render_official_sources_status(data: pd.DataFrame) -> None:
                     "الحالة",
                     "التغطية",
                     "الاستخدام في المنتج",
-                    "درجة الثقة",
                     "الرابط",
                 ]
             ],
@@ -2372,7 +2645,7 @@ def render_official_sources_status(data: pd.DataFrame) -> None:
             columns={
                 "indicator_ar": "المؤشر",
                 "source_ar": "المصدر",
-                "confidence_ar": "الثقة",
+                "classification_ar": "التصنيف المنهجي",
                 "method_ar": "طريقة الحساب",
                 "decision_use_ar": "استخدامه في القرار",
                 "limitation_ar": "حدود المؤشر",
@@ -2723,13 +2996,32 @@ def scope_narrative(data: pd.DataFrame) -> str:
     return f"آخر فترة {latest_text}، مع {locations:,.0f} موقع و{property_types:,.0f} نوع عقار داخل الفلتر."
 
 
-def render_user_profile_selector() -> UserProfile:
+def render_core_navigation() -> str:
+    initialize_core_state(st.session_state)
+    current_route = normalize_route(st.session_state.get("core.route"))
+    if st.session_state.get("core.route") != current_route:
+        st.session_state["core.route"] = current_route
+
+    st.sidebar.markdown("### التنقل الرئيسي")
+    selected_route = st.sidebar.radio(
+        "وجهات قرينة",
+        ROUTE_IDS,
+        format_func=lambda route_id: ROUTE_LABELS_AR[route_id],
+        key="core.route",
+    )
+    st.sidebar.caption(f"المسار الحالي: {ROUTE_LABELS_AR[selected_route]}")
+    return selected_route
+
+
+def render_user_profile_selector() -> tuple[UserProfile, str]:
     logo_uri = brand_logo_data_uri()
     st.sidebar.markdown(
-        f'<div class="brand-lockup"><img src="{logo_uri}" alt="شعار {escape(BRAND_NAME_AR)}" /><div><small>{escape(BRAND_NAME_EN)}</small><strong>{escape(BRAND_NAME_AR)}</strong></div></div>',
+        f'<div class="brand-lockup"><img src="{logo_uri}" alt="شعار {escape(BRAND_NAME_AR)}" /><div><small>ذكاء عقاري</small><strong>{escape(BRAND_NAME_AR)}</strong></div></div>',
         unsafe_allow_html=True,
     )
     st.sidebar.caption(BRAND_TAGLINE)
+    st.sidebar.divider()
+    route_id = render_core_navigation()
     st.sidebar.divider()
     render_auth_sidebar()
     st.sidebar.divider()
@@ -2745,7 +3037,7 @@ def render_user_profile_selector() -> UserProfile:
     profile = get_user_profile(user_profile_key_from_label(selected_label))
     st.sidebar.caption(profile.description)
     st.sidebar.divider()
-    return profile
+    return profile, route_id
 
 
 def render_user_profile_overview(profile: UserProfile) -> None:
@@ -2818,45 +3110,187 @@ def render_platform_page() -> None:
                 st.write(case.outcome)
 
 
-def main() -> None:
-    user_profile = render_user_profile_selector()
-    warehouse_version = get_warehouse_version_string()
-    data = get_data(warehouse_version)
-    sale_data = get_sale_data(warehouse_version)
-    render_digital_header(data)
+def _navigate_to_core_route(route_id: str) -> None:
+    st.session_state["core.route"] = normalize_route(route_id)
 
-    if data.empty:
-        render_empty_state()
-        return
 
-    filtered, settings = render_filters(data)
-    if filtered.empty:
-        st.warning("لا توجد بيانات مطابقة للفلاتر الحالية.")
-        return
-
-    snapshot = build_market_snapshot(filtered, settings)
-    settings["user_profile"] = user_profile.key
-    render_user_profile_overview(user_profile)
-    decision_tab, analyst_tab, market_tab, data_tab, neighborhood_tab, riyadh_map_tab, platform_tab = st.tabs(
-        [*list(user_profile.tab_labels), "📋 تقرير المخطط", "🗺️ خريطة الرياض", "المنصة"]
+def render_home_page(data: pd.DataFrame) -> None:
+    view_model = build_home_view_model(data)
+    st.markdown(
+        """
+        <section class="home-hero">
+            <p class="home-eyebrow">ذكاء عقاري قائم على البيانات</p>
+            <h2>افهم السوق، ثم راجع الفرصة قبل القرار العقاري.</h2>
+            <p>
+                تساعدك قرينة على قراءة حركة سوق الإيجار ومراجعة الفرص ضمن نطاق واضح،
+                ثم الانتقال إلى تحليل عقار محدد أو استكشاف السوق بتفصيل أكبر.
+            </p>
+        </section>
+        """,
+        unsafe_allow_html=True,
     )
 
-    with decision_tab:
-        if user_profile.key in {"investor", "broker"}:
-            render_riyadh_first_page(data, settings, sale_data)
-        elif user_profile.key == "developer":
-            render_developer_ai(filtered, sale_data)
-            st.divider()
-            render_kpis(filtered, settings, snapshot)
-        else:
-            render_ai_briefing(filtered, settings, snapshot)
-            render_kpis(filtered, settings, snapshot)
+    with st.container(key="home_actions"):
+        primary, secondary = st.columns(2)
+        with primary:
+            st.button(
+                "حلّل صفقة",
+                type="primary",
+                key="home_cta_deal",
+                width="stretch",
+                on_click=_navigate_to_core_route,
+                args=("deal_analysis",),
+            )
+            st.markdown('<p class="home-action-note">ابدأ بعقار وسعر ومساحة محددة.</p>', unsafe_allow_html=True)
+        with secondary:
+            st.button(
+                "استكشف السوق",
+                type="secondary",
+                key="home_cta_market",
+                width="stretch",
+                on_click=_navigate_to_core_route,
+                args=("market_exploration",),
+            )
+            st.markdown('<p class="home-action-note">ابدأ بالنطاق والبيانات المرصودة.</p>', unsafe_allow_html=True)
 
-    with analyst_tab:
+    st.markdown(
+        f"""
+        <div class="home-scope">
+            <span>النطاق الحالي</span>
+            <strong>{escape(view_model.scope_ar)}</strong>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not view_model.available:
+        st.info(view_model.data_message_ar)
+        return
+
+    metrics_markup = "".join(
+        f"""
+        <article class="home-kpi">
+            <div class="home-kpi-label">{escape(metric.label_ar)}</div>
+            <div class="home-kpi-value">{escape(metric.value_ar)}</div>
+            <div class="home-evidence">{escape(metric.evidence_ar)}</div>
+            <div class="home-context">{escape(metric.context_ar)}</div>
+        </article>
+        """
+        for metric in view_model.metrics
+    )
+    st.markdown(
+        f"""
+        <section class="home-section">
+            <div class="home-section-heading">
+                <h3>ماذا يحدث في النطاق الحالي؟</h3>
+                <p>ثلاثة مؤشرات موجزة للفترة نفسها، مع توضيح نوع الدليل وطريقة القراءة.</p>
+            </div>
+            <div class="home-kpi-grid">{metrics_markup}</div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if view_model.opportunities:
+        opportunities_markup = "".join(
+            f"""
+            <article class="home-opportunity">
+                <h4>{escape(item.segment_ar)} · {escape(item.property_type_ar)}</h4>
+                <div class="home-context">{escape(item.cohort_ar)}</div>
+                <div class="home-opportunity-data">
+                    <div>
+                        <span class="home-opportunity-label">متوسط الإيجار المنشور</span>
+                        <strong>{escape(item.average_rent_ar)}</strong>
+                        <div class="home-evidence">{escape(item.rent_evidence_ar)}</div>
+                    </div>
+                    <div>
+                        <span class="home-opportunity-label">عقود الإيجار</span>
+                        <strong>{escape(item.total_deals_ar)}</strong>
+                        <div class="home-evidence">{escape(item.deals_evidence_ar)}</div>
+                    </div>
+                    <div>
+                        <span class="home-opportunity-label">التغير الربعي</span>
+                        <strong>{escape(item.growth_ar)}</strong>
+                        <div class="home-evidence">{escape(item.growth_evidence_ar)}</div>
+                        <div class="home-context">{escape(item.growth_period_ar)}</div>
+                    </div>
+                </div>
+                <div class="home-score-line">
+                    <span>مؤشر الفرصة</span>
+                    <strong>{escape(item.score_ar)}</strong>
+                    <span>· {escape(item.evidence_ar)} · {escape(item.rank_context_ar)}</span>
+                </div>
+            </article>
+            """
+            for item in view_model.opportunities
+        )
+        st.markdown(
+            f"""
+            <section class="home-section">
+                <div class="home-section-heading">
+                    <h3>فرص تستحق المراجعة</h3>
+                    <p>ترتيب أولي داخل مجموعة المقارنة الحالية؛ ابدأ بالدليل المرصود قبل قراءة المؤشر النسبي.</p>
+                </div>
+                <div class="home-opportunity-grid">{opportunities_markup}</div>
+            </section>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        f"""
+        <section class="home-methodology">
+            <h3>الدليل والمنهجية باختصار</h3>
+            <p><strong>المصدر:</strong> {escape(view_model.source_ar)}</p>
+            <p>{escape(view_model.limitation_ar)}</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.button(
+        "راجع البيانات والمنهجية",
+        type="secondary",
+        key="home_cta_methodology",
+        on_click=_navigate_to_core_route,
+        args=("data_methodology",),
+    )
+
+
+def render_legacy_primary_route(
+    user_profile: UserProfile,
+    data: pd.DataFrame,
+    filtered: pd.DataFrame,
+    settings: dict[str, object],
+    sale_data: pd.DataFrame,
+) -> None:
+    if user_profile.key in {"investor", "broker"}:
+        render_riyadh_first_page(data, settings, sale_data)
+    elif user_profile.key == "developer":
+        render_developer_ai(filtered, sale_data)
+        st.divider()
+        render_kpis(filtered, settings, build_market_snapshot(filtered, settings))
+    else:
+        snapshot = build_market_snapshot(filtered, settings)
         render_ai_briefing(filtered, settings, snapshot)
-        render_decision_assistant(filtered, settings, snapshot)
+        render_kpis(filtered, settings, snapshot)
 
-    with market_tab:
+
+def render_active_core_route(
+    route_id: str,
+    user_profile: UserProfile,
+    data: pd.DataFrame,
+    filtered: pd.DataFrame,
+    settings: dict[str, object],
+    sale_data: pd.DataFrame,
+) -> str:
+    def render_home() -> None:
+        render_home_page(data)
+
+    def render_deal() -> None:
+        render_legacy_primary_route(user_profile, data, filtered, settings, sale_data)
+
+    def render_market() -> None:
+        snapshot = build_market_snapshot(filtered, settings)
         render_kpis(filtered, settings, snapshot)
         render_charts(filtered, settings, snapshot)
         with st.expander("قائمة الفرص المحسوبة", expanded=False):
@@ -2866,7 +3300,19 @@ def main() -> None:
             with st.expander("خرائط الرياض الحرارية وتوزيع الصفقات", expanded=False):
                 render_riyadh_market_maps(riyadh, settings)
 
-    with data_tab:
+    def render_comparison() -> None:
+        scores = build_riyadh_property_scores(
+            riyadh_focus_data(data), int(settings["min_deals"])
+        )
+        if scores.empty:
+            st.info("لا توجد شرائح مؤهلة للمقارنة ضمن النطاق الحالي.")
+            return
+        render_neighborhood_comparison_engine(scores)
+
+    def render_reports() -> None:
+        render_neighborhood_report_page()
+
+    def render_data_methodology() -> None:
         render_data_engine_status()
         render_sale_indicator_coverage(sale_data)
         render_official_sources_status(data)
@@ -2875,14 +3321,55 @@ def main() -> None:
         with st.expander("البيانات الموحدة", expanded=False):
             render_data_table(filtered, nested=True)
 
-    with neighborhood_tab:
-        render_neighborhood_report_page()
+    renderers = {
+        "home": render_home,
+        "deal_analysis": render_deal,
+        "market_exploration": render_market,
+        "comparison": render_comparison,
+        "reports": render_reports,
+        "data_methodology": render_data_methodology,
+    }
+    return dispatch_route(route_id, renderers)
 
-    with riyadh_map_tab:
-        render_riyadh_map_page()
 
-    with platform_tab:
-        render_platform_page()
+def main() -> None:
+    user_profile, route_id = render_user_profile_selector()
+    warehouse_version = get_warehouse_version_string()
+    data = get_data(warehouse_version)
+    needs_sale_data = route_id in {"deal_analysis", "data_methodology"}
+    sale_data = get_sale_data(warehouse_version) if needs_sale_data else pd.DataFrame()
+    render_digital_header(data, ROUTE_LABELS_AR[route_id], show_status=route_id != "home")
+
+    if data.empty:
+        render_empty_state()
+        return
+
+    if route_id == "home":
+        render_active_core_route(
+            route_id,
+            user_profile,
+            data,
+            data,
+            {"min_deals": 10, "user_profile": user_profile.key},
+            sale_data,
+        )
+        return
+
+    filtered, settings = render_filters(data)
+    if filtered.empty:
+        st.warning("لا توجد بيانات مطابقة للفلاتر الحالية.")
+        return
+
+    settings["user_profile"] = user_profile.key
+    render_user_profile_overview(user_profile)
+    render_active_core_route(
+        route_id,
+        user_profile,
+        data,
+        filtered,
+        settings,
+        sale_data,
+    )
 
 
 def apply_pending_developer_project(property_types: list[str]) -> str | None:
@@ -3111,11 +3598,11 @@ def render_developer_ai(market_data: pd.DataFrame, sale_data: pd.DataFrame) -> N
     decision = decision_labels.get(str(result["decision"]), "مراجعة")
     score = float(result["development_score"])
     if score >= 72:
-        st.success(f"القرار: {decision} — درجة التطوير {score:.1f}/100 — الثقة {result['confidence']}")
+        st.success(f"القرار: {decision} — درجة التطوير {score:.1f}/100 — كفاية البيانات {result.get('data_sufficiency', result['confidence'])}")
     elif score >= 52:
-        st.warning(f"القرار: {decision} — درجة التطوير {score:.1f}/100 — الثقة {result['confidence']}")
+        st.warning(f"القرار: {decision} — درجة التطوير {score:.1f}/100 — كفاية البيانات {result.get('data_sufficiency', result['confidence'])}")
     else:
-        st.error(f"القرار: {decision} — درجة التطوير {score:.1f}/100 — الثقة {result['confidence']}")
+        st.error(f"القرار: {decision} — درجة التطوير {score:.1f}/100 — كفاية البيانات {result.get('data_sufficiency', result['confidence'])}")
 
     headline = st.columns(5)
     headline[0].metric("الوحدات التقديرية", f"{total_units:,.0f}")
@@ -3673,15 +4160,33 @@ def build_riyadh_property_scores(riyadh: pd.DataFrame, min_deals: int) -> pd.Dat
     market = market.sort_values(["neighborhood", "property_type", "period_index"]).copy()
     grouped = market.groupby(["neighborhood", "property_type"], dropna=False)
     market["previous_period"] = grouped["period"].shift(1)
+    market["previous_period_index"] = grouped["period_index"].shift(1)
+    market["period_gap"] = market["period_index"] - market["previous_period_index"]
     market["previous_average_rent"] = grouped["average_rent"].shift(1)
     market["previous_total_deals"] = grouped["total_deals"].shift(1)
     market["growth_pct"] = pct_series(market["average_rent"], market["previous_average_rent"])
     market["deals_growth_pct"] = pct_series(market["total_deals"], market["previous_total_deals"])
 
-    latest_period = market["period_index"].max()
+    invalid_comparison = market["period_gap"].ne(1) | market["previous_average_rent"].le(0)
+    market.loc[invalid_comparison, ["growth_pct", "deals_growth_pct"]] = pd.NA
+
+    eligible = market[
+        market["growth_pct"].notna()
+        & market["period_gap"].eq(1)
+        & (market["total_deals"] >= min_deals)
+        & (market["previous_total_deals"] >= min_deals)
+    ]
+    if eligible.empty:
+        return market.iloc[0:0].copy()
+    latest_period = eligible["period_index"].max()
     latest = market[market["period_index"] == latest_period].copy()
     latest = latest.dropna(subset=["average_rent", "total_deals"])
-    latest = latest[latest["total_deals"] >= min_deals].copy()
+    latest = latest[
+        latest["growth_pct"].notna()
+        & latest["period_gap"].eq(1)
+        & (latest["total_deals"] >= min_deals)
+        & (latest["previous_total_deals"] >= min_deals)
+    ].copy()
     if latest.empty:
         return latest
 
@@ -3703,10 +4208,13 @@ def build_riyadh_property_scores(riyadh: pd.DataFrame, min_deals: int) -> pd.Dat
     latest["deals_growth_pct"] = pd.to_numeric(latest["deals_growth_pct"], errors="coerce")
     latest["average_rent"] = pd.to_numeric(latest["average_rent"], errors="coerce")
     latest["total_deals"] = pd.to_numeric(latest["total_deals"], errors="coerce")
-    latest["demand_rank"] = latest["total_deals"].rank(pct=True)
-    latest["growth_rank"] = latest["growth_pct"].fillna(0).clip(lower=-50, upper=50).rank(pct=True)
-    latest["affordability_rank"] = 1 - latest["average_rent"].rank(pct=True)
-    volatility = latest["growth_pct"].fillna(0).abs().clip(lower=0, upper=80) / 80
+    cohort = latest.groupby("property_type", dropna=False)
+    latest["demand_rank"] = cohort["total_deals"].rank(pct=True)
+    latest["growth_rank"] = latest["growth_pct"].clip(lower=-50, upper=50).groupby(
+        latest["property_type"], dropna=False
+    ).rank(pct=True)
+    latest["affordability_rank"] = 1 - cohort["average_rent"].rank(pct=True)
+    volatility = latest["growth_pct"].abs().clip(lower=0, upper=80) / 80
     latest["risk_score"] = (latest["demand_rank"] * 65 + (1 - volatility) * 35).clip(lower=0, upper=100)
     latest["liquidity_score"] = latest["demand_rank"] * 100
     latest["property_score"] = (
@@ -3716,6 +4224,8 @@ def build_riyadh_property_scores(riyadh: pd.DataFrame, min_deals: int) -> pd.Dat
         + (latest["risk_score"] / 100) * 15
     ).clip(lower=0, upper=100)
     latest["score"] = latest["property_score"]
+    latest["score_classification"] = "Inference"
+    latest["score_cohort"] = "same_property_type_within_riyadh"
 
     # Add investor strategy scores to align with the main analytics module
     latest["investor_score_balanced"] = (
@@ -4036,7 +4546,7 @@ def build_investor_report(
     best = top.iloc[0]
     alerts = detect_market_signals(scores)
     average_score = safe_float(scores["property_score"].mean(), 0)
-    high_confidence = scores[scores["total_deals"] >= max(min_deals * 3, min_deals)]
+    high_sufficiency = scores[scores["total_deals"] >= max(min_deals * 3, min_deals)]
 
     lines = [
         "# تقرير المحلل العقاري - الرياض",
@@ -4048,7 +4558,7 @@ def build_investor_report(
             f"أفضل فرصة محسوبة حاليًا هي {best['neighborhood']} | {best['property_type']} "
             f"بدرجة {safe_float(best.get('property_score', 0)):,.1f}/100. "
             f"متوسط درجة الفرص داخل القائمة {average_score:,.1f}/100، "
-            f"وعدد الشرائح الأعلى ثقة من ناحية العقود {len(high_confidence):,.0f}."
+            f"وعدد الشرائح الأعلى كفاية من ناحية العقود {len(high_sufficiency):,.0f}."
         ),
         "",
         "## أفضل الفرص",
@@ -4076,9 +4586,9 @@ def build_investor_report(
             "## قرار أولي",
             investor_decision_text(best),
             "",
-            "## مصادر التقرير ومستوى الثقة",
+            "## مصادر التقرير وحدود الاستخدام",
             "المصدر النشط حالياً: الهيئة العامة للعقار - بيانات الإيجار المفتوحة، مع التحقق من الكتالوج عبر منصة البيانات المفتوحة الوطنية عند التحديث.",
-            "مستوى الثقة: عال لتحليل الإيجارات والعقود، ومتوسط لمؤشر الفرص لأنه مؤشر مشتق وليس تقييماً رسمياً.",
+            "التصنيف المنهجي: الإيجارات والعقود مؤشرات منشورة/محسوبة، ومؤشر الفرص استدلال نسبي وليس تقييمًا رسميًا.",
             "ما لا يغطيه التقرير بعد: صفقات البيع التفصيلية، سعر المتر، حدود الأحياء الجغرافية الرسمية، حالة العقار، والتمويل.",
             "",
             "## ملاحظة منهجية",
@@ -4462,7 +4972,7 @@ def render_property_valuation_engine(
         stress_a, stress_b, stress_c = st.columns(3)
         stress_a.metric("تحمل السيناريوهات", f"{stress_test['resilience_pct']:.0f}%")
         stress_b.metric("أقصى سعر شراء آمن", format_sar(float(stress_test["risk_adjusted_max_offer"])))
-        stress_c.metric("ثقة القرار", confidence_labels.get(str(stress_test["confidence"]), "منخفضة"))
+        stress_c.metric("كفاية بيانات القرار", confidence_labels.get(str(stress_test["confidence"]), "منخفضة"))
 
         scenario_rows = pd.DataFrame(stress_test["scenarios"])
         scenario_rows["القرار"] = scenario_rows["decision"].map(decision_labels)
@@ -4592,8 +5102,8 @@ def render_market_forecast(forecast: dict[str, object], district: str, property_
         f"{float(forecast['demand_change_pct']):+.1f}% خلال سنة",
     )
     metrics[2].metric(
-        "ثقة التوقع",
-        confidence_labels.get(str(forecast.get("confidence")), "منخفضة"),
+        "كفاية التاريخ",
+        confidence_labels.get(str(forecast.get("history_sufficiency", forecast.get("confidence"))), "منخفضة"),
         f"{int(forecast.get('periods_used', 0))} أرباع تاريخية",
     )
 

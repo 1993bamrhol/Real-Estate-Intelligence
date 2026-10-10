@@ -26,6 +26,9 @@ PYTHON_FILES = [
     ROOT / "src" / "real_estate_intel" / "reporting.py",
     ROOT / "src" / "real_estate_intel" / "underwriting.py",
     ROOT / "src" / "real_estate_intel" / "sales.py",
+    ROOT / "src" / "real_estate_intel" / "ui" / "contracts.py",
+    ROOT / "src" / "real_estate_intel" / "ui" / "home.py",
+    ROOT / "src" / "real_estate_intel" / "ui" / "shell.py",
 ]
 
 

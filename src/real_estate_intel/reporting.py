@@ -61,7 +61,7 @@ th {{ background: #eef4f1; }}
 <body><main class="sheet">
 <h1>مذكرة قرار استثماري للعقار</h1>
 <p class="note">تاريخ الإنشاء: {generated_at} | مصدر السوق: بيانات الإيجار الرسمية المتاحة داخل المنصة.</p>
-<div class="decision"><strong>القرار: {decision}</strong> — درجة الصفقة {_number(analysis.get('deal_score'), 1)}/100 — ثقة {confidence}</div>
+<div class="decision"><strong>القرار: {decision}</strong> — درجة الصفقة {_number(analysis.get('deal_score'), 1)}/100 — كفاية البيانات {confidence}</div>
 
 <h2>بيانات العقار</h2>
 <table><tbody>
@@ -176,7 +176,7 @@ def build_investment_memo_pdf(
     confidence = confidence_labels.get(str(stress_test.get("confidence", "")), "منخفضة")
     story.append(
         Paragraph(
-            rtl(f"القرار: {decision} | درجة الصفقة {_number(analysis.get('deal_score'), 1)}/100 | الثقة {confidence}"),
+            rtl(f"القرار: {decision} | درجة الصفقة {_number(analysis.get('deal_score'), 1)}/100 | كفاية البيانات {confidence}"),
             heading_style,
         )
     )
@@ -229,7 +229,9 @@ def build_investment_memo_pdf(
     )
 
     if forecast and forecast.get("ready"):
-        forecast_confidence = confidence_labels.get(str(forecast.get("confidence")), "منخفضة")
+        forecast_confidence = confidence_labels.get(
+            str(forecast.get("history_sufficiency", forecast.get("confidence"))), "منخفضة"
+        )
         add_table(
             "توقع سنة مقبلة",
             [
@@ -238,7 +240,7 @@ def build_investment_memo_pdf(
                 [_money(forecast.get("forecast_rent")), "الإيجار المتوقع - محايد"],
                 [f"{_number(forecast.get('rent_change_pct'), 1)}%", "تغير الإيجار المتوقع"],
                 [f"{_number(forecast.get('demand_change_pct'), 1)}%", "تغير الطلب المتوقع"],
-                [forecast_confidence, "ثقة التوقع"],
+                [forecast_confidence, "كفاية التاريخ"],
             ],
             [95 * mm, 65 * mm],
         )

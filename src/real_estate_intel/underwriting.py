@@ -136,13 +136,14 @@ def stress_test_property(assumptions: PropertyAssumptions) -> dict[str, object]:
     resilience_pct = positive_scenarios / len(rows) * 100
     worst_cash_flow = min(float(row["annual_cash_flow"]) for row in rows)
     max_offer = risk_adjusted_max_offer(assumptions)
-    confidence = _confidence_label(assumptions.market_sample_size, resilience_pct)
+    data_sufficiency = _data_sufficiency_label(assumptions.market_sample_size, resilience_pct)
     return {
         "scenarios": rows,
         "resilience_pct": resilience_pct,
         "worst_cash_flow": worst_cash_flow,
         "risk_adjusted_max_offer": max_offer,
-        "confidence": confidence,
+        "confidence": data_sufficiency,
+        "data_sufficiency": data_sufficiency,
     }
 
 
@@ -188,7 +189,7 @@ def _deal_score(
     return round(_clamp(yield_score + price_score + cash_score + risk_score + demand_score, 0, 100), 1)
 
 
-def _confidence_label(sample_size: int, resilience_pct: float) -> str:
+def _data_sufficiency_label(sample_size: int, resilience_pct: float) -> str:
     if sample_size >= 100 and resilience_pct >= 66:
         return "high"
     if sample_size >= 30 and resilience_pct >= 33:

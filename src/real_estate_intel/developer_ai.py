@@ -51,7 +51,9 @@ def analyze_development(assumptions: DevelopmentAssumptions) -> dict[str, float 
         **metrics,
         "development_score": score,
         "decision": decision,
-        "confidence": _confidence(assumptions.market_sample_size),
+        # Compatibility alias: this label reflects sample sufficiency only.
+        "confidence": _data_sufficiency(assumptions.market_sample_size),
+        "data_sufficiency": _data_sufficiency(assumptions.market_sample_size),
         "warnings": warnings,
     }
 
@@ -103,6 +105,7 @@ def recommend_product_mix(
     *,
     total_units: int,
     top_n: int = 4,
+    min_deals: int = 10,
 ) -> pd.DataFrame:
     columns = [
         "property_type",
@@ -121,17 +124,26 @@ def recommend_product_mix(
     if market.empty:
         return pd.DataFrame(columns=columns)
     market = market.sort_values(["property_type", "period_index"]).copy()
-    market["previous_rent"] = market.groupby("property_type")["average_rent"].shift(1)
+    grouped = market.groupby("property_type", dropna=False)
+    market["previous_period_index"] = grouped["period_index"].shift(1)
+    market["period_gap"] = market["period_index"] - market["previous_period_index"]
+    market["previous_rent"] = grouped["average_rent"].shift(1)
+    market["previous_total_deals"] = grouped["total_deals"].shift(1)
     market["growth_pct"] = (
         (market["average_rent"] - market["previous_rent"]) / market["previous_rent"] * 100
     )
     latest = market[market["period_index"].eq(market["period_index"].max())].copy()
-    latest = latest.dropna(subset=["average_rent", "total_deals"])
+    latest = latest.dropna(subset=["average_rent", "total_deals", "growth_pct"])
+    latest = latest[
+        latest["period_gap"].eq(1)
+        & latest["total_deals"].ge(min_deals)
+        & latest["previous_total_deals"].ge(min_deals)
+    ].copy()
     if latest.empty:
         return pd.DataFrame(columns=columns)
 
     latest["demand_rank"] = latest["total_deals"].rank(pct=True)
-    latest["growth_rank"] = latest["growth_pct"].fillna(0).clip(-50, 50).rank(pct=True)
+    latest["growth_rank"] = latest["growth_pct"].clip(-50, 50).rank(pct=True)
     latest["rent_rank"] = latest["average_rent"].rank(pct=True)
     latest["market_score"] = (
         latest["demand_rank"] * 50 + latest["growth_rank"] * 30 + latest["rent_rank"] * 20
@@ -180,7 +192,7 @@ def build_developer_brief(
     return (
         "### توصية قرينة AI للمطور\n\n"
         f"**القرار:** {decision}. درجة التطوير {float(result['development_score']):.1f}/100 "
-        f"بثقة {result['confidence']}.\n\n"
+        f"بكفاية بيانات {result.get('data_sufficiency', result['confidence'])}.\n\n"
         f"**الاقتصاديات:** تكلفة كلية {float(result['total_cost']):,.0f} ر.س، قيمة تطويرية "
         f"{float(result['sale_revenue']):,.0f} ر.س، وربح متوقع {float(result['profit']):,.0f} ر.س "
         f"بهامش {float(result['margin_pct']):.1f}%. سعر التعادل {float(result['break_even_sale_price_per_sqm']):,.0f} "
@@ -439,10 +451,10 @@ def _development_score(metrics: dict[str, float], assumptions: DevelopmentAssump
         else -1
     )
     safety_score = _clamp(safety_gap / 0.25, 0, 1) * 10
-    confidence_score = {"مرتفعة": 5.0, "متوسطة": 3.0, "منخفضة": 1.0}[
-        _confidence(assumptions.market_sample_size)
+    sufficiency_score = {"مرتفعة": 5.0, "متوسطة": 3.0, "منخفضة": 1.0}[
+        _data_sufficiency(assumptions.market_sample_size)
     ]
-    return round(_clamp(margin_score + roi_score + yield_score + demand_score + safety_score + confidence_score, 0, 100), 1)
+    return round(_clamp(margin_score + roi_score + yield_score + demand_score + safety_score + sufficiency_score, 0, 100), 1)
 
 
 def _max_construction_cost_for_margin(
@@ -485,7 +497,7 @@ def _mix_reason(row: pd.Series) -> str:
     return "، ".join(reasons) or "توازن نسبي بين الطلب والإيجار"
 
 
-def _confidence(sample_size: int) -> str:
+def _data_sufficiency(sample_size: int) -> str:
     if sample_size >= 150:
         return "مرتفعة"
     if sample_size >= 40:

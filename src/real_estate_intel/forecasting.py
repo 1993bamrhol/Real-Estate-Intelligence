@@ -52,7 +52,11 @@ def forecast_market(frame: pd.DataFrame, horizons: int = 4) -> dict[str, object]
     forecast = pd.DataFrame(rows)
     horizon_rows = forecast[forecast["period_index"].eq(last_period + horizons)].set_index("scenario")
     base_horizon = horizon_rows.loc["base"]
-    confidence = _confidence(len(trend), float(trend.tail(4)["total_deals"].sum()))
+    history_sufficiency = _history_sufficiency(
+        len(trend), float(trend.tail(4)["total_deals"].sum())
+    )
+    backtest = _rolling_backtest(trend)
+    validation_status = _validation_status(backtest)
     return {
         "ready": True,
         "history": trend,
@@ -65,9 +69,14 @@ def forecast_market(frame: pd.DataFrame, horizons: int = 4) -> dict[str, object]
         "forecast_demand": float(base_horizon["total_deals"]),
         "rent_change_pct": _pct(float(base_horizon["average_rent"]), float(latest["average_rent"])),
         "demand_change_pct": _pct(float(base_horizon["total_deals"]), float(latest["total_deals"])),
-        "confidence": confidence,
+        # Compatibility alias for existing report consumers. This is sample/history
+        # sufficiency, not a probability or forecast-accuracy confidence level.
+        "confidence": history_sufficiency,
+        "history_sufficiency": history_sufficiency,
+        "validation_status": validation_status,
+        "backtest": backtest,
         "periods_used": len(trend),
-        "method_ar": "اتجاه ربعي حديث مخفّض الأثر مع نطاق عدم يقين مشتق من تذبذب التاريخ.",
+        "method_ar": "اتجاه ربعي حديث مخفّض الأثر مع نطاق عدم يقين واختبار رجعي متحرك بخطوة واحدة.",
     }
 
 
@@ -95,12 +104,50 @@ def _uncertainty_spread(growth: pd.Series, minimum: float, maximum: float) -> fl
     return _clamp(mad * 1.5, minimum, maximum)
 
 
-def _confidence(periods: int, recent_deals: float) -> str:
+def _history_sufficiency(periods: int, recent_deals: float) -> str:
     if periods >= 10 and recent_deals >= 200:
         return "high"
     if periods >= 6 and recent_deals >= 60:
         return "medium"
     return "low"
+
+
+def _rolling_backtest(trend: pd.DataFrame) -> dict[str, float | int | None]:
+    rent_errors: list[float] = []
+    demand_errors: list[float] = []
+    for index in range(4, len(trend)):
+        history = trend.iloc[:index]
+        actual = trend.iloc[index]
+        rent_rate = _weighted_rate(_growth_series(history["average_rent"], -0.12, 0.12), 0.06)
+        demand_rate = _weighted_rate(_growth_series(history["total_deals"], -0.30, 0.30), 0.12)
+        predicted_rent = float(history.iloc[-1]["average_rent"]) * (1 + rent_rate)
+        predicted_demand = float(history.iloc[-1]["total_deals"]) * (1 + demand_rate)
+        actual_rent = float(actual["average_rent"])
+        actual_demand = float(actual["total_deals"])
+        if actual_rent > 0:
+            rent_errors.append(abs(predicted_rent - actual_rent) / actual_rent * 100)
+        if actual_demand > 0:
+            demand_errors.append(abs(predicted_demand - actual_demand) / actual_demand * 100)
+
+    return {
+        "folds": min(len(rent_errors), len(demand_errors)),
+        "rent_mape_pct": round(float(pd.Series(rent_errors).mean()), 3) if rent_errors else None,
+        "demand_mape_pct": round(float(pd.Series(demand_errors).mean()), 3)
+        if demand_errors
+        else None,
+    }
+
+
+def _validation_status(backtest: dict[str, float | int | None]) -> str:
+    if int(backtest.get("folds") or 0) < 4:
+        return "limited_backtest"
+    rent_error = float(backtest.get("rent_mape_pct") or 0)
+    demand_error = float(backtest.get("demand_mape_pct") or 0)
+    if rent_error > 20 or demand_error > 30:
+        return "backtested_high_error"
+    if rent_error > 10 or demand_error > 20:
+        return "backtested_moderate_error"
+    return "backtested_low_error"
 
 
 def _period_label(period_index: int) -> str:

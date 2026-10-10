@@ -1,0 +1,148 @@
+{
+  "generated_at": "2026-09-01T01:10:02.771848+03:00",
+  "sources": [
+    "data\\processed\\rental_market.csv.gz",
+    "data\\processed\\sale_market.csv.gz"
+  ],
+  "rental_quality": {
+    "rows": 44455,
+    "columns": 19,
+    "periods": 29,
+    "first_period": "2019 Q1",
+    "latest_period": "2026 Q1",
+    "latest_rows": 9355,
+    "latest_deals": 607865,
+    "latest_locations": 4861,
+    "datasets": 37,
+    "exact_duplicate_rows": 0,
+    "business_key_duplicate_rows": 0,
+    "business_key_duplicate_groups": 0,
+    "business_key_duplicate_rate_pct": 0.0,
+    "duplicate_groups_across_datasets": 0,
+    "duplicate_groups_with_identical_measures": 0,
+    "potential_deal_overcount_pct": 0.0,
+    "latest_potential_deal_overcount_pct": 0.0,
+    "invalid_rent_rows": 0,
+    "invalid_deal_rows": 0,
+    "zero_deal_rows": 3,
+    "district_missing_pct": 24.9038,
+    "source_timestamp_missing_pct": 0.0
+  },
+  "metric_checks": {
+    "latest_period": "2026 Q1",
+    "latest_weighted_average_rent": 25246.18,
+    "latest_simple_average_rent": 22377.29,
+    "weighted_vs_simple_pct": 12.821,
+    "growth_comparisons": 19474,
+    "growth_candidates": 28085,
+    "growth_candidates_rejected_for_period_gap": 8611,
+    "nonconsecutive_growth_comparisons": 0,
+    "nonconsecutive_growth_rate_pct": 0.0,
+    "max_growth_period_gap": 1,
+    "latest_comparable_panel_rent": 25246.18,
+    "latest_all_market_rent": 25246.18,
+    "comparable_panel_difference_pct": 0.0,
+    "opportunity_entities": 1315,
+    "opportunity_missing_previous_period": 0,
+    "opportunity_zero_growth_after_fill": 0,
+    "opportunity_observed_zero_growth": 1,
+    "scope_sensitivity": [
+      {
+        "property_type": "شقة",
+        "entities": 756,
+        "median_abs_score_delta": 0.0,
+        "max_abs_score_delta": 0.0,
+        "median_rank_shift": 0.0,
+        "max_rank_shift": 0
+      }
+    ]
+  },
+  "riyadh_score_checks": {
+    "rows": 551,
+    "latest_period": "2026 Q1",
+    "score_min": 7.651,
+    "score_max": 84.753,
+    "missing_previous_period_rows": 0,
+    "previous_deals_below_threshold_rows": 0,
+    "nonconsecutive_growth_rows": 0,
+    "growth_above_clip_rows": 10,
+    "signals": [
+      {
+        "signal_type": "new_leader",
+        "neighborhood": "النسيم الغربي",
+        "property_type": "دور",
+        "growth_pct": 7.862265617373771,
+        "previous_period": "2025 Q4",
+        "previous_total_deals": 442,
+        "total_deals": 421
+      },
+      {
+        "signal_type": "value_opportunity",
+        "neighborhood": "النسيم الغربي",
+        "property_type": "دور",
+        "growth_pct": 7.862265617373771,
+        "previous_period": "2025 Q4",
+        "previous_total_deals": 442,
+        "total_deals": 421
+      },
+      {
+        "signal_type": "momentum",
+        "neighborhood": "شبرا",
+        "property_type": "استديو",
+        "growth_pct": 79.27959070169179,
+        "previous_period": "2025 Q4",
+        "previous_total_deals": 99,
+        "total_deals": 200
+      }
+    ]
+  },
+  "sale_quality": {
+    "rows": 44,
+    "first_period": "2023 Q3",
+    "latest_period": "2026 Q2",
+    "cities": 1,
+    "district_rows": 32,
+    "districts": 3,
+    "property_types": 1,
+    "deed_count_total": 120834,
+    "invalid_price_rows": 0,
+    "invalid_deed_rows": 0
+  },
+  "forecast_check": {
+    "ready": true,
+    "latest_period": "2026 Q1",
+    "target_period": "2027 Q1",
+    "periods_used": 12,
+    "history_sufficiency": "high",
+    "validation_status": "backtested_high_error",
+    "backtest": {
+      "folds": 8,
+      "rent_mape_pct": 18.989,
+      "demand_mape_pct": 45.383
+    },
+    "rent_change_pct": -4.269,
+    "demand_change_pct": 32.472,
+    "method": "اتجاه ربعي حديث مخفّض الأثر مع نطاق عدم يقين واختبار رجعي متحرك بخطوة واحدة."
+  },
+  "governance_check": {
+    "metrics": 9,
+    "unique_metric_ids": 9,
+    "classifications": [
+      "Calculated",
+      "Estimated",
+      "Forecast",
+      "Inference",
+      "Raw"
+    ],
+    "allowed_classifications": [
+      "Calculated",
+      "Estimated",
+      "Forecast",
+      "Inference",
+      "Raw"
+    ],
+    "metrics_with_period_rule": 9,
+    "metrics_with_cohort": 9,
+    "metrics_with_eligibility": 9
+  }
+}

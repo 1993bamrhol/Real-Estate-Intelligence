@@ -1,6 +1,15 @@
+[server]
+enableStaticServing = true
+
 [theme]
 base = "light"
 primaryColor = "#0B6B53"
 backgroundColor = "#F8FAF8"
 secondaryBackgroundColor = "#FFFFFF"
 textColor = "#17201B"
+font = "Cairo"
+
+[[theme.fontFaces]]
+family = "Cairo"
+url = "app/static/fonts/Cairo-Variable.ttf"
+style = "normal"
